@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+# task sets, tracings, keys and results stay out of the repository
+build*/
+state*/
+private/
+out/
+demo/images/
+demo/manifest.csv
+demo/truth.csv

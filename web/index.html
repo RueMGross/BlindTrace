@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Particle tracing</title>
+<style>
+:root {
+  --bg: #0e0f11; --panel: rgba(24,26,30,.92); --line: #2c2f36; --ink: #e8e6e1; --ink2: #9a978f;
+  --ev: #3ddc84; --unsure: #f5b942; --sel: #ffffff; --stroke: #4cc9f0; --accent: #3ddc84; --warn: #ff6b5b;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+#cv { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.bar { position: fixed; left: 0; right: 0; display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: var(--panel); border-color: var(--line); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 5; }
+#top { top: 0; border-bottom: 1px solid var(--line); padding-top: max(8px, env(safe-area-inset-top)); }
+#bottom { bottom: 0; border-top: 1px solid var(--line); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.grow { flex: 1; }
+#bottom { flex-wrap: wrap; }
+button { font: inherit; color: var(--ink); background: #23262c; border: 1px solid #3a3e46; border-radius: 10px;
+  padding: 10px 14px; min-height: 44px; min-width: 44px; cursor: pointer; }
+button:active { background: #30343c; }
+button.on { background: #1f3b2c; border-color: var(--accent); }
+button.primary { background: var(--accent); color: #0b1a10; border-color: var(--accent); font-weight: 600; }
+button.danger { color: var(--warn); }
+button:disabled { opacity: .4; }
+#prog { font-weight: 600; }
+#save { color: var(--ink2); font-size: 13px; min-width: 90px; text-align: right; }
+#save.err { color: var(--warn); }
+.sl { display: flex; align-items: center; gap: 6px; color: var(--ink2); font-size: 13px; }
+.sl input { width: 110px; }
+.overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center;
+  z-index: 20; padding: 24px; }
+.card { max-width: 560px; width: 100%; background: #16181c; border: 1px solid var(--line); border-radius: 16px; padding: 28px; }
+.card h1 { margin: 0 0 6px; font-size: 24px; }
+.card p, .card li { color: var(--ink2); }
+.card ul { padding-left: 20px; margin: 12px 0 20px; }
+.card input[type=text] { font: inherit; font-size: 20px; width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #3a3e46;
+  background: #0e0f11; color: var(--ink); margin: 6px 0 14px; text-transform: uppercase; -webkit-user-select: text; user-select: text; }
+.card .row { display: flex; gap: 10px; flex-wrap: wrap; }
+#pop { position: fixed; z-index: 8; display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px; gap: 6px; align-items: center; flex-wrap: wrap; max-width: 92vw; }
+#pop .size { padding: 0 8px; font-weight: 600; white-space: nowrap; }
+#adj { position: fixed; left: 50%; transform: translateX(-50%); z-index: 6; display: none; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px 6px 4px 12px; max-width: 96vw; }
+#adj input { width: 280px; max-width: 40vw; height: 36px; }
+#adj .lab { color: var(--ink2); font-size: 13px; }
+#adjsize { font-weight: 600; min-width: 80px; white-space: nowrap; }
+#sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 25; display: none; align-items: center; justify-content: center; }
+#sheet .card { max-width: 440px; }
+#sheet .card button { width: 100%; margin-top: 8px; text-align: left; }
+#toast { position: fixed; left: 50%; top: 70px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 14px; z-index: 9; display: none; }
+.err-text { color: var(--warn); min-height: 1.4em; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="top" class="bar">
+  <span id="prog">–</span>
+  <span id="who" style="color:var(--ink2)"></span>
+  <button id="switch" title="Hand the iPad to another person" style="min-height:34px;padding:4px 10px;font-size:13px">Switch person</button>
+  <span class="grow"></span>
+  <label class="sl">Bright <input id="bri" type="range" min="-100" max="100" value="0"></label>
+  <label class="sl">Contrast <input id="con" type="range" min="-60" max="200" value="0"></label>
+  <span id="save"></span>
+</div>
+
+<div id="bottom" class="bar">
+  <button id="back" title="Previous image">‹ Back</button>
+  <button id="finger" title="Draw with finger (if no Apple Pencil)">✍︎ Finger draw</button>
+  <button id="fit" title="Fit image">Fit</button>
+  <button id="snapbtn" title="Snap new lines to the nearest edge">⌖ Snap</button>
+  <button id="undo" title="Undo">Undo</button>
+  <span class="grow"></span>
+  <button id="excl" class="danger">Exclude…</button>
+  <button id="approve" class="primary">Approve ›</button>
+</div>
+
+<div id="pop">
+  <span class="size" id="popsize"></span>
+  <button id="p-alt">↻ Other fit</button>
+  <button id="p-mine">✎ My line</button>
+  <button id="p-unsure">? Unsure</button>
+  <button id="p-del" class="danger">Delete</button>
+</div>
+
+<div id="adj">
+  <span id="adjsize"></span>
+  <span class="lab">less</span>
+  <input id="adjr" type="range" min="-30" max="100" step="1" value="0" title="Include less / more">
+  <span class="lab">more</span>
+  <button id="adjreset" title="Back to the fitted line">Reset</button>
+</div>
+
+<div id="toast"></div>
+
+<div id="sheet"><div class="card" id="sheetcard"></div></div>
+
+<div id="login" class="overlay">
+  <div class="card">
+    <h1>Particle tracing</h1>
+    <p>Blinded: images are shown in random order and orientation, without names.</p>
+    <ul>
+      <li><b>Apple Pencil:</b> trace the outer boundary of each particle, including its dark rim if it has one. Your line is used exactly as drawn and shows the diameter. Zoom in to trace precisely.</li>
+      <li><b>Tap a contour</b> to mark it unsure or delete it.</li>
+      <li><b>Particles cut by the image edge:</b> trace them anyway and carry the line past the edge where you think the outline goes. They are marked ~ (at edge).</li>
+      <li><b>Fingers:</b> drag to move, pinch to zoom.</li>
+      <li>When everything in the image is traced, tap <b>Approve</b>. An image with no particles is approved empty.</li>
+      <li>Everything is saved automatically; you can stop and continue later.</li>
+    </ul>
+    <label>Your initials</label>
+    <input id="name" type="text" maxlength="16" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <div class="err-text" id="loginerr"></div>
+    <div class="row"><button id="start" class="primary">Start</button></div>
+  </div>
+</div>
+
+<div id="end" class="overlay" style="display:none">
+  <div class="card">
+    <h1>All images done</h1>
+    <p id="endtxt"></p>
+    <div class="row"><button id="review">Review images</button></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const API = location.pathname.replace(/[^/]*$/, '');
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+let dpr = window.devicePixelRatio || 1;
+
+let me = null, tasks = [], status = {}, idx = 0;
+let task = null, W = 0, H = 0, gray = null, disp = null, nmpp = 1;
+let contours = [], undoStack = [], selected = null, showPop = false, tOpen = null, curStatus = 'draft';
+let view = { s: 1, ox: 0, oy: 0 };
+let fingerDraw = false, bc = { b: 0, c: 0 };
+let loadSeq = 0;
+
+// ---------------------------------------------------------------- geometry
+function polyArea(p) {
+  let a = 0;
+  for (let i = 0, n = p.length; i < n; i++) { const q = p[(i + 1) % n]; a += p[i][0] * q[1] - q[0] * p[i][1]; }
+  return a / 2;
+}
+function centroid(p) {
+  let a2 = 0, cx = 0, cy = 0;
+  for (let i = 0, n = p.length; i < n; i++) {
+    const q = p[(i + 1) % n], cr = p[i][0] * q[1] - q[0] * p[i][1];
+    a2 += cr; cx += (p[i][0] + q[0]) * cr; cy += (p[i][1] + q[1]) * cr;
+  }
+  if (Math.abs(a2) < 1e-9) {
+    let sx = 0, sy = 0; for (const q of p) { sx += q[0]; sy += q[1]; }
+    return [sx / p.length, sy / p.length];
+  }
+  return [cx / (3 * a2), cy / (3 * a2)];
+}
+// second area moments of the filled polygon -> area, major, minor (same as evtem.detect.poly_moments)
+function moments(p) {
+  let mx = 0, my = 0; for (const q of p) { mx += q[0]; my += q[1]; } mx /= p.length; my /= p.length;
+  let a2 = 0, gx = 0, gy = 0, sxx = 0, syy = 0, sxy = 0;
+  for (let i = 0, n = p.length; i < n; i++) {
+    const x = p[i][0] - mx, y = p[i][1] - my, xn = p[(i + 1) % n][0] - mx, yn = p[(i + 1) % n][1] - my;
+    const cr = x * yn - xn * y;
+    a2 += cr; gx += (x + xn) * cr; gy += (y + yn) * cr;
+    sxx += (x * x + x * xn + xn * xn) * cr; syy += (y * y + y * yn + yn * yn) * cr;
+    sxy += (x * yn + 2 * x * y + 2 * xn * yn + xn * y) * cr;
+  }
+  if (Math.abs(a2) < 1e-9) return { area: 0, major: 0, minor: 0 };
+  const A = a2 / 2; gx /= 6 * A; gy /= 6 * A;
+  sxx = sxx / 12 / A - gx * gx; syy = syy / 12 / A - gy * gy; sxy = sxy / 24 / A - gx * gy;
+  const tr = sxx + syy, det = sxx * syy - sxy * sxy, d = Math.sqrt(Math.max(tr * tr / 4 - det, 0));
+  return { area: Math.abs(A), major: 4 * Math.sqrt(Math.max(tr / 2 + d, 0)), minor: 4 * Math.sqrt(Math.max(tr / 2 - d, 0)) };
+}
+// edge: the line reaches or crosses the image border (particle cut by the edge; the part
+// outside the image is the annotator's estimate)
+function sizeOf(pts) {
+  const m = moments(pts), edge = pts.some(q => q[0] <= 0.5 || q[1] <= 0.5 || q[0] >= W - 0.5 || q[1] >= H - 0.5);
+  return { d_nm: 2 * Math.sqrt(m.area / Math.PI) * nmpp, major_nm: m.major * nmpp, minor_nm: m.minor * nmpp, edge };
+}
+function pointInPoly(x, y, p) {
+  let c = false;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+    if (((p[i][1] > y) !== (p[j][1] > y)) && (x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1] + 1e-12) + p[i][0])) c = !c;
+  }
+  return c;
+}
+
+// ---------------------------------------------------------------- snapping
+const NA = 72, NR = 40, MAXSTEP = 3, STEP_PEN = 0.12;
+// Prior: the boundary is expected near the drawn line (slightly inside it, people circle
+// around a structure). A strong edge anywhere in the band still wins; between edges of
+// similar strength (e.g. lumen texture vs. membrane) the one nearer the line is taken.
+// [band low, band high, expected boundary position, weight] relative to the drawn line (P1)
+// and to the first-pass contour (P2)
+let P1 = [0.45, 1.25, 0.9, 2.5], P2 = [0.8, 1.3, 1.05, 2.5];
+const AUTO = new Set(['edge_bright', 'edge_dark']);
+
+function radiusProfile(p, cx, cy) {
+  const ang = [], rad = [];
+  for (const q of p) {
+    ang.push((Math.atan2(q[1] - cy, q[0] - cx) + 2 * Math.PI) % (2 * Math.PI));
+    rad.push(Math.hypot(q[0] - cx, q[1] - cy));
+  }
+  const o = ang.map((_, i) => i).sort((a, b) => ang[a] - ang[b]);
+  const A = o.map(i => ang[i]), R = o.map(i => rad[i]), n = A.length, out = new Float64Array(NA);
+  for (let a = 0; a < NA; a++) {
+    const th = 2 * Math.PI * a / NA;
+    let j = 0; while (j < n && A[j] < th) j++;
+    const i1 = j % n, i0 = (j - 1 + n) % n;
+    let a0 = A[i0], a1 = A[i1];
+    if (j === 0) a0 -= 2 * Math.PI;
+    if (j === n) a1 += 2 * Math.PI;
+    const t = a1 - a0 > 1e-9 ? (th - a0) / (a1 - a0) : 0;
+    out[a] = R[i0] + t * (R[i1] - R[i0]);
+  }
+  // light circular smoothing of the hand-drawn profile
+  for (let pass = 0; pass < 3; pass++) {
+    const c = Float64Array.from(out);
+    for (let a = 0; a < NA; a++) out[a] = (c[(a + NA - 1) % NA] + 2 * c[a] + c[(a + 1) % NA]) / 4;
+  }
+  return out;
+}
+
+function blur(src, w, h, sigma) {
+  const r = Math.max(1, Math.ceil(3 * sigma)), k = new Float32Array(2 * r + 1);
+  let s = 0; for (let i = -r; i <= r; i++) { k[i + r] = Math.exp(-i * i / (2 * sigma * sigma)); s += k[i + r]; }
+  for (let i = 0; i < k.length; i++) k[i] /= s;
+  const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let v = 0; for (let i = -r; i <= r; i++) { const xx = Math.min(w - 1, Math.max(0, x + i)); v += k[i + r] * src[y * w + xx]; }
+    tmp[y * w + x] = v;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let v = 0; for (let i = -r; i <= r; i++) { const yy = Math.min(h - 1, Math.max(0, y + i)); v += k[i + r] * tmp[yy * w + x]; }
+    out[y * w + x] = v;
+  }
+  return out;
+}
+
+// Gaussian blur for large sigma: three box passes (running sums, cost independent of sigma)
+function boxPass(src, w, h, r, horiz) {
+  const out = new Float32Array(w * h), n = horiz ? w : h, m = horiz ? h : w, inv = 1 / (2 * r + 1);
+  for (let j = 0; j < m; j++) {
+    const at = i => horiz ? src[j * w + Math.min(n - 1, Math.max(0, i))] : src[Math.min(n - 1, Math.max(0, i)) * w + j];
+    let acc = 0; for (let i = -r; i <= r; i++) acc += at(i);
+    for (let i = 0; i < n; i++) {
+      out[horiz ? j * w + i : i * w + j] = acc * inv;
+      acc += at(i + r + 1) - at(i - r);
+    }
+  }
+  return out;
+}
+function blurFast(src, w, h, sigma) {
+  if (sigma < 2.5) return blur(src, w, h, sigma);
+  const wi = Math.sqrt(12 * sigma * sigma / 3 + 1); let wl = Math.floor(wi); if (wl % 2 === 0) wl--;
+  const m = Math.round((12 * sigma * sigma - 3 * wl * wl - 12 * wl - 9) / (-4 * wl - 4));
+  let a = src;
+  for (let k = 0; k < 3; k++) { const r = ((k < m ? wl : wl + 2) - 1) / 2; a = boxPass(boxPass(a, w, h, r, true), w, h, r, false); }
+  return a;
+}
+
+function bilinear(B, w, h, x, y) {
+  x = Math.min(w - 1.001, Math.max(0, x)); y = Math.min(h - 1.001, Math.max(0, y));
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, i = y0 * w + x0;
+  return B[i] * (1 - fx) * (1 - fy) + B[i + 1] * fx * (1 - fy) + B[i + w] * (1 - fx) * fy + B[i + w + 1] * fx * fy;
+}
+
+// max-sum closed path through E[a][k] (|dk| <= MAXSTEP, penalty per step); three laps, keep the middle
+function dpClosed(E, maxstep = MAXSTEP, pen = STEP_PEN) {
+  const NR = E[0].length, MAXSTEP_ = maxstep;
+  const L = 3 * NA, back = new Int16Array(L * NR);
+  let score = Float64Array.from(E[0]);
+  for (let a = 1; a < L; a++) {
+    const e = E[a % NA], next = new Float64Array(NR);
+    for (let k = 0; k < NR; k++) {
+      let best = -Infinity, bj = k;
+      for (let d = -MAXSTEP_; d <= MAXSTEP_; d++) {
+        const j = k + d; if (j < 0 || j >= NR) continue;
+        const v = score[j] - pen * Math.abs(d);
+        if (v > best) { best = v; bj = j; }
+      }
+      next[k] = best + e[k]; back[a * NR + k] = bj;
+    }
+    score = next;
+  }
+  let k = 0; for (let j = 1; j < NR; j++) if (score[j] > score[k]) k = j;
+  const path = new Int16Array(L);
+  for (let a = L - 1; a >= 0; a--) { path[a] = k; k = back[a * NR + k]; }
+  return path.slice(NA, 2 * NA);
+}
+
+const FEATURES = [
+  ['edge_bright', 'edge (bright inside)'], ['edge_dark', 'edge (dark inside)'],
+  ['rim_dark', 'dark rim'], ['rim_bright', 'bright rim'],
+];
+
+function snapCore(cx, cy, rd, lo, hi, target, weight) {
+  let rmax = 0; for (const r of rd) rmax = Math.max(rmax, r);
+  const pad = Math.ceil(rmax * hi + 8);
+  const x0 = Math.max(0, Math.floor(cx - pad)), y0 = Math.max(0, Math.floor(cy - pad));
+  const x1 = Math.min(W, Math.ceil(cx + pad)), y1 = Math.min(H, Math.ceil(cy + pad));
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 4 || h < 4) return null;
+  let rmean = 0; for (const r of rd) rmean += r / NA;
+  const sub = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) sub.set(gray.subarray((y + y0) * W + x0, (y + y0) * W + x1), y * w);
+  const B = blur(sub, w, h, Math.min(4, Math.max(0.8, rmean / 10)));
+  const I = [], D = [];
+  for (let a = 0; a < NA; a++) {
+    const th = 2 * Math.PI * a / NA, c = Math.cos(th), s = Math.sin(th);
+    const row = new Float64Array(NR);
+    for (let k = 0; k < NR; k++) {
+      const r = rd[a] * (lo + (hi - lo) * k / (NR - 1));
+      row[k] = bilinear(B, w, h, cx + r * c - x0, cy + r * s - y0);
+    }
+    const dr = rd[a] * (hi - lo) / (NR - 1), der = new Float64Array(NR);
+    for (let k = 0; k < NR; k++) der[k] = (row[Math.min(NR - 1, k + 1)] - row[Math.max(0, k - 1)]) / ((k > 0 && k < NR - 1 ? 2 : 1) * Math.max(dr, 1e-6));
+    I.push(row); D.push(der);
+  }
+  const feats = {
+    edge_bright: D.map(r => r.map(v => -v)), edge_dark: D,
+    rim_dark: I.map(r => { const m = r.reduce((s, v) => s + v, 0) / NR; return r.map(v => m - v); }),
+    rim_bright: I.map(r => { const m = r.reduce((s, v) => s + v, 0) / NR; return r.map(v => v - m); }),
+  };
+  const alts = [];
+  for (const [name, label] of FEATURES) {
+    const E = feats[name];
+    let m = 0, m2 = 0; for (const r of E) for (const v of r) { m += v; m2 += v * v; }
+    const n = NA * NR; m /= n; const sd = Math.sqrt(Math.max(m2 / n - m * m, 1e-12));
+    const Z = E.map(r => Float64Array.from(r, (v, k) => (v - m) / sd - weight * Math.abs(lo + (hi - lo) * k / (NR - 1) - target)));
+    const path = dpClosed(Z);
+    let sc = 0; for (let a = 0; a < NA; a++) sc += Z[a][path[a]] / NA;
+    const rr = Float64Array.from(path, (k, a) => rd[a] * (lo + (hi - lo) * k / (NR - 1)));
+    for (let pass = 0; pass < 2; pass++) {
+      const c = Float64Array.from(rr);
+      for (let a = 0; a < NA; a++) rr[a] = (c[(a + NA - 1) % NA] + 2 * c[a] + c[(a + 1) % NA]) / 4;
+    }
+    const pts = Array.from(rr, (r, a) => [cx + r * Math.cos(2 * Math.PI * a / NA), cy + r * Math.sin(2 * Math.PI * a / NA)]);
+    alts.push({ feature: name, label, score: sc, pts });
+  }
+  return alts;
+}
+
+function profileOf(pts) {
+  const [cx, cy] = centroid(pts);
+  return [cx, cy, radiusProfile(pts, cx, cy)];
+}
+
+// ---- detector port: blob centre/scale inside the loop, then the detector's ray fit ----
+// Mirrors evtem/detect.py: channels 'int' (intensity, bright and dark) and 'tex' (log
+// of locally averaged squared gradient, texture_sigma 1.5 nm); scale-normalised LoG
+// for centre and radius; boundary = DP over 72 rays, radii 0.5-1.6 x r0, maximising
+// the normalised outward derivative (edge SNR). Works on a local copy resampled so the
+// object spans ~40-60 px, which makes the result independent of magnification and of
+// how large or off-centre the loop was drawn.
+function boxDown(x0, y0, w, h, q) {
+  const out = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    let s = 0, n = 0;
+    for (let dy = 0; dy < q; dy++) {
+      const y = y0 + j * q + dy; if (y < 0 || y >= H) continue;
+      for (let dx = 0; dx < q; dx++) { const x = x0 + i * q + dx; if (x < 0 || x >= W) continue; s += gray[y * W + x]; n++; }
+    }
+    out[j * w + i] = n ? s / n : NaN;
+  }
+  // pixels outside the image: fill with the median so they look like background
+  const v = Array.from(out).filter(Number.isFinite).sort((a, b) => a - b), med = v.length ? v[v.length >> 1] : 128;
+  for (let i = 0; i < out.length; i++) if (!Number.isFinite(out[i])) out[i] = med;
+  return out;
+}
+function robustZ(a) {
+  const v = Float32Array.from(a).sort(), n = v.length, med = v[n >> 1];
+  const dev = Float32Array.from(a, x => Math.abs(x - med)).sort(), mad = 1.4826 * dev[n >> 1] || 1;
+  return Float32Array.from(a, x => (x - med) / mad);
+}
+function grad(S, w, h) {
+  const gx = new Float32Array(w * h), gy = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    gx[i] = (S[y * w + Math.min(w - 1, x + 1)] - S[y * w + Math.max(0, x - 1)]) / 2;
+    gy[i] = (S[Math.min(h - 1, y + 1) * w + x] - S[Math.max(0, y - 1) * w + x]) / 2;
+  }
+  return [gx, gy];
+}
+function energyMap(img, w, h, sg) {
+  const [gx, gy] = grad(blur(img, w, h, sg), w, h);
+  const g2 = Float32Array.from(gx, (v, i) => v * v + gy[i] * gy[i]);
+  return robustZ(Float32Array.from(blur(g2, w, h, sg), v => Math.log(v + 1e-6)));
+}
+function sdOf(a) { let m = 0, m2 = 0; for (const v of a) { m += v; m2 += v * v; } m /= a.length; return Math.sqrt(Math.max(m2 / a.length - m * m, 1e-12)); }
+
+function blobsInLoop(drawn) {
+  const [cx, cy] = centroid(drawn), rl = Math.sqrt(Math.abs(polyArea(drawn)) / Math.PI);
+  const q = Math.max(1, Math.round(rl / 32)), half = Math.ceil((1.2 + BLOB_RMAX) * rl / q) + 4, w = 2 * half, h = 2 * half;
+  const x0 = Math.round(cx) - half * q, y0 = Math.round(cy) - half * q;
+  const I = robustZ(boxDown(x0, y0, w, h, q));
+  const T = energyMap(I, w, h, Math.max(0.7, 1.5 / nmpp / q));
+  const inside = new Uint8Array(w * h);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) inside[j * w + i] = pointInPoly(x0 + i * q + (q - 1) / 2, y0 + j * q + (q - 1) / 2, drawn) ? 1 : 0;
+  const n = 11, rmin = 0.25 * rl / q, rmax = BLOB_RMAX * rl / q, out = [];
+  for (const [ch, img, pols] of [['int', I, [1, -1]], ['tex', T, [1]]]) {
+    const perScale = pols.map(() => []);
+    for (let si = 0; si < n; si++) {
+      const best = pols.map(pol => ({ z: -Infinity, ch, pol }));
+      const r = rmin * Math.pow(rmax / rmin, si / (n - 1)), sg = r / Math.SQRT2, S = blurFast(img, w, h, sg);
+      const L = new Float32Array(w * h);
+      for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x; L[i] = -sg * sg * (S[i + 1] + S[i - 1] + S[i + w] + S[i - w] - 4 * S[i]);
+      }
+      const sd = sdOf(L);
+      for (let i = 0; i < w * h; i++) {
+        if (!inside[i]) continue;
+        pols.forEach((pol, k) => {
+          const z = pol * L[i] / sd;
+          if (z > best[k].z) best[k] = { z, ch, pol, x: x0 + (i % w) * q + (q - 1) / 2, y: y0 + Math.floor(i / w) * q + (q - 1) / 2, r: r * q };
+        });
+      }
+      best.forEach((b, k) => perScale[k].push(b));
+    }
+    // candidates: scales where the best response is a local maximum over scale
+    for (const arr of perScale) arr.forEach((b, k) => {
+      if (Number.isFinite(b.z) && b.z > 2 && (k === 0 || b.z >= arr[k - 1].z) && (k === arr.length - 1 || b.z >= arr[k + 1].z)) out.push(b);
+    });
+  }
+  return out;
+}
+
+const RS = [0.5, 1.6], NRR = 48;
+let BLOB_RMAX = 1.4, SIZE_PRIOR = [0.8, 1.5];   // largest blob radius searched, x the loop's equivalent radius (tight loops)
+function fitBoundary(c) {
+  const q = Math.max(1, Math.round(c.r / 40)), r0 = c.r / q;
+  const half = Math.ceil(RS[1] * r0) + 8, w = 2 * half, h = 2 * half;
+  const x0 = Math.round(c.x) - half * q, y0 = Math.round(c.y) - half * q;
+  let img = robustZ(boxDown(x0, y0, w, h, q));
+  if (c.ch === 'tex') img = energyMap(img, w, h, Math.max(0.7, 1.5 / nmpp / q));
+  const [gx, gy] = grad(blur(img, w, h, Math.min(4, Math.max(1, r0 / 6))), w, h);
+  const sdg = sdOf(gx);
+  const ccx = (c.x - x0 - (q - 1) / 2) / q, ccy = (c.y - y0 - (q - 1) / 2) / q;
+  const dr = r0 * (RS[1] - RS[0]) / (NRR - 1), E = [];
+  for (let a = 0; a < NA; a++) {
+    const th = 2 * Math.PI * a / NA, co = Math.cos(th), si = Math.sin(th), row = new Float64Array(NRR);
+    for (let k = 0; k < NRR; k++) {
+      const r = r0 * RS[0] + k * dr, x = ccx + r * co, y = ccy + r * si;
+      row[k] = -c.pol * (bilinear(gx, w, h, x, y) * co + bilinear(gy, w, h, x, y) * si) / sdg;
+    }
+    E.push(row);
+  }
+  const path = dpClosed(E, Math.max(1, Math.round(r0 * (2 * Math.PI / NA) / dr)), 0);
+  let sc = 0; for (let a = 0; a < NA; a++) sc += E[a][path[a]] / NA;
+  const pts = Array.from(path, (k, a) => {
+    const r = r0 * RS[0] + k * dr, th = 2 * Math.PI * a / NA;
+    return [x0 + (q - 1) / 2 + (ccx + r * Math.cos(th)) * q, y0 + (q - 1) / 2 + (ccy + r * Math.sin(th)) * q];
+  });
+  const name = c.ch === 'tex' ? 'texture' : c.pol > 0 ? 'bright' : 'dark';
+  return { feature: `det_${name}`, label: `${name} object`, score: sc, pts };
+}
+
+function snap(drawn) {
+  const rd = profileOf(drawn)[2];
+  let rmean = 0; for (const r of rd) rmean += r / NA;
+  if (rmean < 2) return null;
+  // rank: edge SNR of the fit, minus a penalty for sizes implausible for the loop drawn
+  // around it (expected object diameter ~ SIZE_PRIOR[0] x loop diameter)
+  const dl = 2 * Math.sqrt(Math.abs(polyArea(drawn)) / Math.PI);
+  const fits = blobsInLoop(drawn).map(fitBoundary);
+  for (const f of fits) {
+    const d = 2 * Math.sqrt(Math.abs(polyArea(f.pts)) / Math.PI);
+    f.rank = f.score - SIZE_PRIOR[1] * Math.abs(Math.log(d / dl / SIZE_PRIOR[0]));
+  }
+  fits.sort((a, b) => b.rank - a.rank);
+  // drop near-duplicates (same object found in several channels/scales)
+  const uniq = [];
+  for (const f of fits) {
+    const [fx, fy] = centroid(f.pts), fa = Math.abs(polyArea(f.pts));
+    if (!uniq.some(u => { const [ux, uy] = centroid(u.pts), ua = Math.abs(polyArea(u.pts));
+      return Math.hypot(fx - ux, fy - uy) < 0.15 * Math.sqrt(ua) && Math.abs(Math.log(fa / ua)) < 0.2; })) uniq.push(f);
+  }
+  if (!uniq.length) return null;
+  const fitsU = uniq;
+  return [...fitsU.slice(0, 5), { feature: 'drawn', label: 'your line', score: null, pts: exactLine(drawn) }];
+}
+
+// the line exactly as drawn: an end carried past the start is cut where it comes closest to
+// the start, then the line is resampled evenly along its length (no smoothing)
+function exactLine(p) {
+  const cum = [0];
+  for (let i = 1; i < p.length; i++) cum.push(cum[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+  const L = cum[cum.length - 1];
+  let end = p.length - 1, best = Infinity;
+  for (let i = 1; i < p.length; i++) {
+    if (cum[i] < 0.5 * L) continue;
+    const d = Math.hypot(p[i][0] - p[0][0], p[i][1] - p[0][1]);
+    if (d < best) { best = d; end = i; }
+  }
+  const Le = cum[end], n = Math.max(24, Math.min(300, Math.round(Le))), out = [];
+  for (let k = 0, i = 0; k < n; k++) {
+    const t = Le * k / n;
+    while (i < end - 1 && cum[i + 1] < t) i++;
+    const f = cum[i + 1] > cum[i] ? (t - cum[i]) / (cum[i + 1] - cum[i]) : 0;
+    out.push([p[i][0] + f * (p[i + 1][0] - p[i][0]), p[i][1] + f * (p[i + 1][1] - p[i][1])]);
+  }
+  return out;
+}
+
+// ---- include less / more: move the fitted line inward or outward by t x its equivalent
+// radius. Along each ray the line clings to the strongest edge (either contrast) within
+// +-ADJ_BAND of the requested position, so it stops on structure (e.g. the outer edge of a
+// dark rim); where there is none it follows the requested position.
+const ADJ_BAND = 0.25, ADJ_SIG = 0.12, ADJ_NR = 31;
+function adjustFit(base, t) {
+  if (!t) return base;
+  const [cx, cy] = centroid(base), rb = radiusProfile(base, cx, cy);
+  for (let pass = 0, np = Math.round(Math.min(1, Math.abs(t) / 0.3) * 12); pass < np; pass++) {
+    const c = Float64Array.from(rb);
+    for (let a = 0; a < NA; a++) rb[a] = (c[(a + NA - 1) % NA] + 2 * c[a] + c[(a + 1) % NA]) / 4;
+  }
+  const req = Math.sqrt(Math.abs(polyArea(base)) / Math.PI), q = Math.max(1, Math.round(req / 40)), r0 = req / q;
+  let rmax = 0; for (const r of rb) rmax = Math.max(rmax, r / q);
+  const half = Math.ceil(rmax + Math.max(0, t) * r0 + ADJ_BAND * r0) + 8, w = 2 * half, h = 2 * half;
+  const x0 = Math.round(cx) - half * q, y0 = Math.round(cy) - half * q;
+  const img = robustZ(boxDown(x0, y0, w, h, q));
+  const [gx, gy] = grad(blur(img, w, h, Math.min(4, Math.max(0.8, r0 / 8))), w, h);
+  const sdg = sdOf(gx), ccx = (cx - x0 - (q - 1) / 2) / q, ccy = (cy - y0 - (q - 1) / 2) / q;
+  const dr = 2 * ADJ_BAND * r0 / (ADJ_NR - 1), lo = Float64Array.from(rb, r => Math.max(0.1 * r0, r / q + t * r0 - ADJ_BAND * r0));
+  const E = [];
+  for (let a = 0; a < NA; a++) {
+    const th = 2 * Math.PI * a / NA, co = Math.cos(th), si = Math.sin(th), target = rb[a] / q + t * r0, row = new Float64Array(ADJ_NR);
+    for (let k = 0; k < ADJ_NR; k++) {
+      const r = lo[a] + k * dr, x = ccx + r * co, y = ccy + r * si;
+      const g = Math.abs(bilinear(gx, w, h, x, y) * co + bilinear(gy, w, h, x, y) * si) / sdg;
+      row[k] = g - 0.5 * ((r - target) / (ADJ_SIG * r0)) ** 2;
+    }
+    E.push(row);
+  }
+  const path = dpClosed(E, Math.max(1, Math.round(r0 * (2 * Math.PI / NA) / dr)), 0.05);
+  const rr = Float64Array.from(path, (k, a) => lo[a] + k * dr);
+  for (let pass = 0; pass < 2; pass++) {
+    const c = Float64Array.from(rr);
+    for (let a = 0; a < NA; a++) rr[a] = (c[(a + NA - 1) % NA] + 2 * c[a] + c[(a + 1) % NA]) / 4;
+  }
+  return Array.from(rr, (r, a) => {
+    const th = 2 * Math.PI * a / NA;
+    return [x0 + (q - 1) / 2 + (ccx + r * Math.cos(th)) * q, y0 + (q - 1) / 2 + (ccy + r * Math.sin(th)) * q];
+  });
+}
+
+function resample(p, n) {
+  if (p.length <= n) return p.map(q => [+q[0].toFixed(1), +q[1].toFixed(1)]);
+  const out = []; for (let i = 0; i < n; i++) { const q = p[Math.floor(i * p.length / n)]; out.push([+q[0].toFixed(1), +q[1].toFixed(1)]); }
+  return out;
+}
+
+// ---------------------------------------------------------------- contours
+let nextId = 1;
+// Snap off (default): the contour is the line as drawn; edge fits are computed only when
+// asked for (tap > Snap to edge). Snap on: the best edge fit, other fits and the drawn line
+// as alternatives.
+let snapOn = false;
+function makeContour(drawn) {
+  const c = { id: nextId++, label: 'particle', drawn: resample(drawn, 150) };
+  if (snapOn) {
+    const alts = snap(drawn);
+    if (!alts) return null;
+    c.alts = alts;
+  } else {
+    c.alts = [{ feature: 'drawn', label: 'your line', score: null, pts: exactLine(drawn) }]; c.lazy = true;
+  }
+  c.alt = 0; applyAlt(c);
+  return c;
+}
+function applyAlt(c) {
+  const a = c.alts[c.alt];
+  c.pts = c.base = a.pts; c.adj = 0; c.feature = a.feature; c.score = a.score;
+  Object.assign(c, sizeOf(c.pts));
+}
+// adj: include less/more setting (fraction of the fitted radius); base: the fit before it
+function serial(c) {
+  const r2 = p => p.map(q => [+q[0].toFixed(2), +q[1].toFixed(2)]);
+  return { id: c.id, label: c.label, feature: c.feature, score: c.score == null ? null : +c.score.toFixed(3),
+    d_nm: +c.d_nm.toFixed(1), major_nm: +c.major_nm.toFixed(1), minor_nm: +c.minor_nm.toFixed(1),
+    pts: r2(c.pts), drawn: c.drawn, edge: !!c.edge, adj: c.adj || 0, base: c.adj ? r2(c.base) : undefined };
+}
+function restore(s) {
+  // saved contours keep their chosen shape; alternatives are recomputed from the drawn line
+  const c = { id: s.id, label: s.label === 'unsure' ? 'unsure' : 'particle', drawn: s.drawn || s.pts, pts: s.pts, feature: s.feature, score: s.score,
+    base: s.base || s.pts, adj: s.adj || 0 };
+  nextId = Math.max(nextId, (s.id || 0) + 1);
+  c.alts = [{ feature: s.feature, label: 'saved', score: s.score, pts: c.base }]; c.alt = 0; c.lazy = true;
+  Object.assign(c, sizeOf(c.pts));
+  return c;
+}
+function pushUndo() { undoStack.push(contours.map(c => ({ ...c }))); if (undoStack.length > 100) undoStack.shift(); }
+
+// ---------------------------------------------------------------- display
+function rebuildDisp() {
+  if (!gray) return;
+  const off = disp || document.createElement('canvas');
+  off.width = W; off.height = H;
+  const octx = off.getContext('2d'), im = octx.createImageData(W, H), d = im.data;
+  const c = bc.c >= 0 ? 1 + bc.c / 50 : 1 + bc.c / 100, b = bc.b * 1.28;
+  const lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) lut[v] = (v - 128) * c + 128 + b;
+  for (let i = 0, n = W * H; i < n; i++) { const v = lut[gray[i]]; d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = v; d[4 * i + 3] = 255; }
+  octx.putImageData(im, 0, 0);
+  disp = off;
+  draw();
+}
+
+// The canvas bitmap follows the canvas's real on-screen box (iPad Safari's 100vh is
+// taller than the visible area while the toolbar shows), and every pointer position
+// is taken relative to that box, so drawing lands exactly under the pencil.
+let cvRect = { left: 0, top: 0, width: innerWidth, height: innerHeight };
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  cvRect = { left: r.left, top: r.top, width: r.width, height: r.height };
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  draw();
+}
+function checkSize() {
+  const r = cv.getBoundingClientRect();
+  if (Math.abs(r.width - cvRect.width) > 0.5 || Math.abs(r.height - cvRect.height) > 0.5 ||
+      Math.abs(r.left - cvRect.left) > 0.5 || Math.abs(r.top - cvRect.top) > 0.5) resize();
+}
+const loc = e => [e.clientX - cvRect.left, e.clientY - cvRect.top];
+function viewport() {
+  const t = $('top').getBoundingClientRect().bottom - cvRect.top, b = $('bottom').getBoundingClientRect().top - cvRect.top;
+  return { x: 0, y: t, w: cvRect.width, h: b - t };
+}
+function fitView() {
+  if (!W) return;
+  const v = viewport(), m = Math.max(32, 0.06 * Math.min(v.w, v.h));
+  const s = Math.min((v.w - 2 * m) / W, (v.h - 2 * m) / H);
+  view = { s, ox: v.x + (v.w - W * s) / 2, oy: v.y + (v.h - H * s) / 2 };
+  draw();
+}
+const toScr = (x, y) => [x * view.s + view.ox, y * view.s + view.oy];
+const toImg = (x, y) => [(x - view.ox) / view.s, (y - view.oy) / view.s];
+
+let raf = 0;
+function draw() { if (!raf) raf = requestAnimationFrame(render); }
+function render() {
+  raf = 0;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0e0f11'; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (!disp) return;
+  ctx.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.ox, dpr * view.oy);
+  ctx.imageSmoothingEnabled = view.s < 3;
+  ctx.drawImage(disp, 0, 0);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1 / view.s; ctx.strokeRect(0, 0, W, H);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (const c of contours) drawContour(c);
+  if (stroke && stroke.pts.length > 1) {
+    ctx.beginPath();
+    stroke.pts.forEach((q, i) => { const [x, y] = toScr(q[0], q[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.strokeStyle = '#4cc9f0'; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.stroke();
+  }
+  drawScaleBar();
+  placePop();
+}
+function drawContour(c) {
+  const sel = c === selected;
+  ctx.beginPath();
+  c.pts.forEach((q, i) => { const [x, y] = toScr(q[0], q[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.closePath();
+  if (sel) { ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 5; ctx.setLineDash([]); ctx.stroke(); }
+  ctx.strokeStyle = c.label === 'unsure' ? '#f5b942' : '#3ddc84';
+  ctx.lineWidth = sel ? 2.5 : 2;
+  ctx.setLineDash(c.label === 'unsure' ? [6, 4] : []);
+  ctx.stroke(); ctx.setLineDash([]);
+  let top = Infinity, sx = 0;
+  for (const q of c.pts) { const [x, y] = toScr(q[0], q[1]); if (y < top) { top = y; sx = x; } }
+  const txt = `${c.edge ? '~' : ''}${Math.round(c.d_nm)}${c.label === 'unsure' ? '?' : ''}`;
+  ctx.font = '600 13px -apple-system, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.strokeText(txt, sx, top - 4);
+  ctx.fillStyle = c.label === 'unsure' ? '#f5b942' : '#3ddc84'; ctx.fillText(txt, sx, top - 4);
+}
+function drawScaleBar() {
+  const target = 120 / view.s * nmpp;   // nm spanned by ~120 screen px
+  const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+  let L = nice[0]; for (const v of nice) if (v <= target) L = v;
+  const px = L / nmpp * view.s, b = $('bottom').getBoundingClientRect().top - cvRect.top - 18;
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(10, b - 22, px + 20, 30);
+  ctx.fillStyle = '#fff'; ctx.fillRect(20, b, px, 4);
+  ctx.font = '600 12px -apple-system, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  ctx.fillText(L >= 1000 ? `${L / 1000} µm` : `${L} nm`, 20, b - 3);
+}
+
+// ---------------------------------------------------------------- selection popover
+function placePop() {
+  const pop = $('pop');
+  updateAdjBar();
+  if (!selected || !showPop) { pop.style.display = 'none'; return; }
+  let minx = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (const q of selected.pts) { const [x, y] = toScr(q[0], q[1]); minx = Math.min(minx, x); maxx = Math.max(maxx, x); maxy = Math.max(maxy, y); }
+  $('popsize').textContent = `Ø ${selected.edge ? '~' : ''}${Math.round(selected.d_nm)} nm · ${Math.round(selected.major_nm)}×${Math.round(selected.minor_nm)}${selected.edge ? ' · at edge' : ''}`;
+  $('p-unsure').textContent = selected.label === 'unsure' ? '✓ Sure' : '? Unsure';
+  $('p-alt').textContent = selected.feature === 'drawn' ? '⌖ Snap to edge' : '↻ Other fit';
+  $('p-mine').disabled = selected.feature === 'drawn';
+  pop.style.display = 'flex';
+  const r = pop.getBoundingClientRect(), vb = $('bottom').getBoundingClientRect().top;
+  let left = (minx + maxx) / 2 - r.width / 2, top = maxy + 12;
+  if (top + r.height > vb - cvRect.top - 8) top = Math.max(60, vb - cvRect.top - r.height - 8);
+  left = Math.max(8, Math.min(cvRect.width - r.width - 8, left));
+  pop.style.left = `${left + cvRect.left}px`; pop.style.top = `${top + cvRect.top}px`;
+}
+function ensureAlts(c) {
+  if (!c.lazy) return;
+  c.lazy = false;
+  const alts = snap(c.drawn);
+  if (!alts) return;
+  // the saved shape takes the place of the recomputed fit of the same kind
+  const i = alts.findIndex(a => a.feature === c.feature);
+  if (i >= 0) { alts[i] = { ...alts[i], pts: c.alts[0].pts, score: c.alts[0].score }; c.alts = alts; c.alt = i; }
+  else c.alts = [c.alts[0], ...alts];
+}
+$('p-alt').onclick = () => {
+  if (!selected) return;
+  ensureAlts(selected);
+  if (selected.alts.length < 2) { toast('No edge found to snap to'); return; }
+  pushUndo(); selected.alt = (selected.alt + 1) % selected.alts.length; applyAlt(selected);
+  toast(`Fit: ${selected.alts[selected.alt].label}`); changed();
+};
+$('p-mine').onclick = () => {
+  if (!selected) return;
+  ensureAlts(selected);
+  const i = selected.alts.findIndex(a => a.feature === 'drawn');
+  if (i >= 0) { pushUndo(); selected.alt = i; applyAlt(selected); changed(); }
+};
+$('p-unsure').onclick = () => {
+  if (!selected) return;
+  pushUndo(); selected.label = selected.label === 'unsure' ? 'particle' : 'unsure'; changed();
+};
+$('p-del').onclick = () => {
+  if (!selected) return;
+  pushUndo(); contours = contours.filter(c => c !== selected); selected = null; changed();
+};
+
+// include less / more for the selected contour (bar above the bottom toolbar; a new loop
+// is selected right away, so it can be adjusted without tapping it first)
+let adjDrag = false, adjRaf = 0;
+function updateAdjBar() {
+  const bar = $('adj');
+  if (!selected || selected.feature === 'drawn') { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  bar.style.bottom = `${$('bottom').offsetHeight + 8}px`;
+  $('adjsize').textContent = `Ø ${selected.edge ? '~' : ''}${Math.round(selected.d_nm)} nm`;
+  $('adjreset').disabled = !selected.adj;
+  if (!adjDrag) $('adjr').value = Math.round((selected.adj || 0) * 100);
+}
+function setAdj(c, t) {
+  c.adj = t; c.pts = adjustFit(c.base, t); Object.assign(c, sizeOf(c.pts)); draw();
+}
+$('adjr').addEventListener('input', () => {
+  if (!selected) return;
+  if (!adjDrag) { pushUndo(); adjDrag = true; }
+  if (!adjRaf) adjRaf = requestAnimationFrame(() => { adjRaf = 0; if (selected) setAdj(selected, +$('adjr').value / 100); });
+});
+$('adjr').addEventListener('change', () => {
+  if (adjRaf) { cancelAnimationFrame(adjRaf); adjRaf = 0; }
+  if (selected && selected.adj !== +$('adjr').value / 100) setAdj(selected, +$('adjr').value / 100);
+  adjDrag = false; changed();
+});
+$('adjreset').onclick = () => { if (selected && selected.adj) { pushUndo(); setAdj(selected, 0); changed(); } };
+
+// ---------------------------------------------------------------- input
+const pointers = new Map();
+let stroke = null, gesture = null, tapCand = null;
+
+function isDraw(e) {
+  if (e.pointerType === 'pen') return true;
+  if (e.pointerType === 'mouse') return e.button === 0 && !e.shiftKey;
+  return fingerDraw && pointers.size === 1;
+}
+function hit(x, y) {
+  const [ix, iy] = toImg(x, y);
+  let best = null, bestA = Infinity;
+  for (const c of contours) {
+    let inside = pointInPoly(ix, iy, c.pts), near = false;
+    if (!inside) for (const q of c.pts) { const [sx, sy] = toScr(q[0], q[1]); if (Math.hypot(sx - x, sy - y) < 14) { near = true; break; } }
+    if (inside || near) { const a = Math.abs(polyArea(c.pts)); if (a < bestA) { bestA = a; best = c; } }
+  }
+  return best;
+}
+function startGesture() {
+  const ps = [...pointers.values()].filter(p => p.type !== 'pen');
+  if (!ps.length) { gesture = null; return; }
+  const cx = ps.reduce((s, p) => s + p.x, 0) / ps.length, cy = ps.reduce((s, p) => s + p.y, 0) / ps.length;
+  const d = ps.length > 1 ? Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) : 0;
+  gesture = { cx, cy, d, view: { ...view }, n: ps.length };
+}
+cv.addEventListener('pointerdown', e => {
+  if (!disp) return;
+  if (stroke && e.pointerType === 'touch') return;          // palm while the pencil draws
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* synthetic or already released pointer */ }
+  checkSize();
+  const [x, y] = loc(e);
+  pointers.set(e.pointerId, { x, y, type: e.pointerType });
+  if (e.pointerType === 'pen' || (isDraw(e) && !gesture)) {
+    gesture = null; tapCand = null;           // the pencil always draws; a resting palm is ignored
+    stroke = { id: e.pointerId, pts: [toImg(x, y)], len: 0, t0: performance.now(), sx: x, sy: y };
+  } else {
+    if (stroke && stroke.id !== e.pointerId && e.pointerType === 'touch') stroke = null;   // second finger: zoom instead
+    tapCand = pointers.size === 1 ? { x, y, t: performance.now(), moved: false } : null;
+    startGesture();
+  }
+});
+cv.addEventListener('pointermove', e => {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  [p.x, p.y] = loc(e);
+  if (stroke && stroke.id === e.pointerId) {
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of (evs.length ? evs : [e])) {
+      const q = toImg(...loc(ev)), last = stroke.pts[stroke.pts.length - 1];
+      stroke.len += Math.hypot(q[0] - last[0], q[1] - last[1]) * view.s;
+      stroke.pts.push(q);
+    }
+    draw(); return;
+  }
+  if (gesture && !stroke) {
+    const ps = [...pointers.values()].filter(q => q.type !== 'pen');
+    if (ps.length !== gesture.n) { startGesture(); return; }
+    const cx = ps.reduce((s, q) => s + q.x, 0) / ps.length, cy = ps.reduce((s, q) => s + q.y, 0) / ps.length;
+    let s = gesture.view.s;
+    if (ps.length > 1 && gesture.d > 0) {
+      const d = Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y);
+      s = Math.min(40, Math.max(0.05, gesture.view.s * d / gesture.d));
+    }
+    const ix = (gesture.cx - gesture.view.ox) / gesture.view.s, iy = (gesture.cy - gesture.view.oy) / gesture.view.s;
+    view = { s, ox: cx - ix * s, oy: cy - iy * s };
+    if (tapCand && Math.hypot(p.x - tapCand.x, p.y - tapCand.y) > 8) tapCand.moved = true;
+    draw();
+  }
+});
+function endPointer(e) {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  pointers.delete(e.pointerId);
+  if (stroke && stroke.id === e.pointerId) {
+    const s = stroke; stroke = null;
+    if (e.type === 'pointercancel') { draw(); return; }
+    if (s.len < 10 && performance.now() - s.t0 < 600) { select(hit(s.sx, s.sy)); return; }
+    const a = Math.abs(polyArea(s.pts)) * view.s * view.s;
+    if (s.pts.length < 6 || a < 150) { toast('Too small: draw a loop around the structure'); draw(); return; }
+    const c = makeContour(s.pts);
+    if (!c) { toast('Could not fit this loop'); draw(); return; }
+    pushUndo(); contours.push(c); selected = snapOn ? c : null; showPop = false; changed();
+    return;
+  }
+  if (tapCand && !tapCand.moved && pointers.size === 0 && performance.now() - tapCand.t < 500 && e.type !== 'pointercancel') {
+    select(hit(tapCand.x, tapCand.y));
+  }
+  tapCand = null;
+  startGesture();
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const f = Math.exp(-e.deltaY * 0.0015), s = Math.min(40, Math.max(0.05, view.s * f));
+  const [mx, my] = loc(e), ix = (mx - view.ox) / view.s, iy = (my - view.oy) / view.s;
+  view = { s, ox: mx - ix * s, oy: my - iy * s }; draw();
+}, { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('dblclick', e => e.preventDefault());
+window.addEventListener('resize', () => { resize(); fitView(); });
+window.addEventListener('orientationchange', () => setTimeout(() => { resize(); fitView(); }, 300));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => checkSize());
+
+function select(c) { selected = c; showPop = !!c; draw(); }
+
+window.addEventListener('keydown', e => {
+  if (!disp || $('login').style.display !== 'none') return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) $('p-del').onclick();
+  else if (e.key === 'z' && (e.metaKey || e.ctrlKey)) $('undo').onclick();
+  else if (e.key === 'f') fitView();
+});
+
+// ---------------------------------------------------------------- saving
+let saveTimer = 0;
+function changed() { draw(); updateBar(); clearTimeout(saveTimer); saveTimer = setTimeout(() => save(curStatus === 'draft' ? 'draft' : curStatus), 700); }
+function payload(st, reason) {
+  return { a: me, t: task.token, status: st, reason: reason || null, contours: contours.map(serial),
+    t_open: tOpen, t_saved: new Date().toISOString(), view: { b: bc.b, c: bc.c }, client: navigator.userAgent.slice(0, 160) };
+}
+function setSave(txt, err) { const el = $('save'); el.textContent = txt; el.className = err ? 'err' : ''; }
+async function post(body) {
+  const r = await fetch(API + 'api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+function queueKey(t) { return `blindtrace.pending.${me}.${t}`; }
+async function save(st, reason) {
+  if (!task) return false;
+  clearTimeout(saveTimer);
+  const body = payload(st, reason);
+  setSave('saving…');
+  try {
+    await post(body);
+    try { localStorage.removeItem(queueKey(body.t)); } catch (e) { /* storage unavailable */ }
+    status[body.t] = { status: st, n: body.contours.length };
+    setSave('saved ✓'); updateBar(); return true;
+  } catch (err) {
+    try { localStorage.setItem(queueKey(body.t), JSON.stringify(body)); } catch (e) { /* storage unavailable */ }
+    setSave('offline – kept, will retry', true); return false;
+  }
+}
+async function flushQueue() {
+  let keys = [];
+  try { keys = Object.keys(localStorage).filter(k => k.startsWith(`blindtrace.pending.${me}.`)); } catch (e) { return; }
+  for (const k of keys) {
+    try { await post(JSON.parse(localStorage.getItem(k))); localStorage.removeItem(k); } catch (e) { return; }
+  }
+  if (keys.length) setSave('saved ✓');
+}
+setInterval(() => { if (me) flushQueue(); }, 15000);
+
+// ---------------------------------------------------------------- tasks
+function nDone() { return tasks.filter(t => status[t.token] && status[t.token].status !== 'draft').length; }
+function updateBar() {
+  $('prog').textContent = task ? `Image ${idx + 1} of ${tasks.length}` : '';
+  $('who').textContent = `· ${me} · ${nDone()} done`;
+  const n = contours.filter(c => c.label !== 'unsure').length, u = contours.length - n;
+  $('approve').textContent = `Approve · ${n} particle${n === 1 ? '' : 's'}${u ? ` + ${u}?` : ''} ›`;
+  $('back').disabled = idx === 0;
+  $('undo').disabled = !undoStack.length;
+}
+async function loadTask(i) {
+  const seq = ++loadSeq;
+  idx = i; task = tasks[i]; selected = null; contours = []; undoStack = []; disp = null; gray = null;
+  W = task.w; H = task.h; nmpp = task.nm_per_px; updateBar(); draw();
+  setSave('loading…');
+  const [img, saved] = await Promise.all([
+    new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = `${API}img/${task.token}.png`; }),
+    fetch(`${API}api/ann?a=${encodeURIComponent(me)}&t=${task.token}`).then(r => r.json()).catch(() => ({})),
+  ]).catch(e => { setSave('image failed to load', true); throw e; });
+  if (seq !== loadSeq) return;
+  const off = document.createElement('canvas'); off.width = W; off.height = H;
+  const octx = off.getContext('2d'); octx.drawImage(img, 0, 0);
+  const d = octx.getImageData(0, 0, W, H).data;
+  gray = new Uint8Array(W * H); for (let k = 0; k < W * H; k++) gray[k] = d[4 * k];
+  let local = null;
+  try { const q = localStorage.getItem(queueKey(task.token)); if (q) local = JSON.parse(q); } catch (e) { /* none */ }
+  const src = local || saved;
+  curStatus = (src && src.status) || 'draft';
+  contours = (src && src.contours || []).map(restore);
+  tOpen = new Date().toISOString();
+  rebuildDisp(); fitView(); updateBar(); setSave(curStatus === 'draft' ? '' : curStatus === 'done' ? 'approved earlier' : 'excluded earlier');
+}
+function nextOpen(from) {
+  for (let k = from; k < tasks.length; k++) if (!status[tasks[k].token] || status[tasks[k].token].status === 'draft') return k;
+  for (let k = 0; k < from; k++) if (!status[tasks[k].token] || status[tasks[k].token].status === 'draft') return k;
+  return -1;
+}
+function advance() {
+  const k = nextOpen(idx + 1);
+  if (k < 0) { showEnd(); return; }
+  loadTask(k);
+}
+function showEnd() {
+  const ex = tasks.filter(t => status[t.token] && status[t.token].status === 'excluded').length;
+  $('endtxt').textContent = `${tasks.length} images annotated (${ex} excluded). Thank you. You can still go back and review.`;
+  $('end').style.display = 'flex';
+}
+$('review').onclick = () => { $('end').style.display = 'none'; loadTask(0); };
+
+$('approve').onclick = async () => {
+  if (!task || !gray) return;
+  const finish = async () => {
+    curStatus = 'done';
+    if (!await save('done')) toast('Offline: kept on this iPad and sent when the connection is back');
+    status[task.token] = { status: 'done', n: contours.length };
+    advance();
+  };
+  if (!contours.length) { sheet('No particles in this image?', [['Yes, approve with no particles', finish], ['Cancel', null]]); return; }
+  finish();
+};
+$('excl').onclick = () => {
+  const go = reason => async () => {
+    curStatus = 'excluded';
+    if (!await save('excluded', reason)) toast('Offline: kept on this iPad and sent when the connection is back');
+    status[task.token] = { status: 'excluded', n: contours.length };
+    advance();
+  };
+  sheet('Exclude this image from analysis?', [
+    ['Out of focus / blurred', go('focus')], ['No specimen / empty area', go('empty')],
+    ['Artefact dominates (stain, ice, damage)', go('artefact')], ['Other problem', go('other')], ['Cancel', null]]);
+};
+$('back').onclick = () => { if (idx > 0) { save(curStatus); loadTask(idx - 1); } };
+$('fit').onclick = fitView;
+function setSnap(on) {
+  snapOn = on; $('snapbtn').classList.toggle('on', on);
+  try { localStorage.setItem('blindtrace.snap', on ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+}
+$('snapbtn').onclick = () => { setSnap(!snapOn); toast(snapOn ? 'Snap on: new lines snap to the nearest edge' : 'Snap off: your line is used exactly as drawn'); };
+// all annotators trace by hand (same method for everyone): snapping is hidden
+const SNAP_UI = false;
+if (SNAP_UI) { try { setSnap(localStorage.getItem('blindtrace.snap') === '1'); } catch (e) { /* storage unavailable */ } }
+else for (const id of ['snapbtn', 'p-alt', 'p-mine']) $(id).style.display = 'none';
+$('undo').onclick = () => { if (!undoStack.length) return; contours = undoStack.pop(); selected = null; changed(); };
+$('finger').onclick = () => { fingerDraw = !fingerDraw; $('finger').classList.toggle('on', fingerDraw); toast(fingerDraw ? 'One finger draws, two fingers move/zoom' : 'Fingers move/zoom; Pencil draws'); };
+let bcTimer = 0;
+for (const id of ['bri', 'con']) $(id).addEventListener('input', () => {
+  bc = { b: +$('bri').value, c: +$('con').value };
+  if (!bcTimer) bcTimer = requestAnimationFrame(() => { bcTimer = 0; rebuildDisp(); });
+});
+
+function sheet(title, opts) {
+  const card = $('sheetcard'); card.innerHTML = '';
+  const h = document.createElement('h1'); h.textContent = title; h.style.fontSize = '20px'; card.appendChild(h);
+  for (const [label, fn] of opts) {
+    const b = document.createElement('button'); b.textContent = label;
+    if (!fn) b.style.color = 'var(--ink2)';
+    b.onclick = () => { $('sheet').style.display = 'none'; if (fn) fn(); };
+    card.appendChild(b);
+  }
+  $('sheet').style.display = 'flex';
+}
+let toastTimer = 0;
+function toast(t) { const el = $('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.style.display = 'none', 1800); }
+
+// ---------------------------------------------------------------- login
+async function start(name, isNew) {
+  $('loginerr').textContent = '';
+  const r = await fetch(`${API}api/state?a=${encodeURIComponent(name)}`);
+  const j = await r.json();
+  if (!r.ok) { $('loginerr').textContent = j.error || 'error'; return; }
+  // initials with nothing saved yet: confirm, so a typo does not start a separate set
+  if (!isNew && !Object.keys(j.status).length) {
+    sheet(`New annotator "${name}"?`, [[`Yes, start a new set as ${name}`, () => start(name, true)], ['Cancel', null]]);
+    return;
+  }
+  me = name; tasks = j.tasks; status = j.status;
+  $('login').style.display = 'none';
+  await flushQueue();
+  const k = nextOpen(0);
+  if (k < 0) { showEnd(); return; }
+  loadTask(k);
+}
+// title of the task set (prepare.py --title), e.g. to tell annotation rounds apart
+fetch(`${API}api/config`).then(r => r.json()).then(c => {
+  if (c.title) { $('login').querySelector('h1').textContent = c.title; document.title = c.title; }
+}).catch(() => { /* keep the default title */ });
+$('start').onclick = () => start($('name').value.trim().toUpperCase());
+$('name').addEventListener('keydown', e => { if (e.key === 'Enter') $('start').onclick(); });
+// initials are not pre-filled: the iPad may be shared, and each person must type their own
+$('switch').onclick = () => sheet('Hand over to another person?', [
+  ['Yes, switch person', async () => { if (task) await save(curStatus); location.reload(); }], ['Cancel', null]]);
+resize();
+</script>
+</body>
+</html>

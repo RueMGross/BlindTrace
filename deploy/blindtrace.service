@@ -1,0 +1,22 @@
+# systemd unit (example). Copy server.py and web/ to /opt/blindtrace, the task set made by
+# prepare.py to /opt/blindtrace/data; tracings go to /var/lib/blindtrace.
+[Unit]
+Description=BlindTrace particle tracing
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/blindtrace/server.py
+Environment=BLINDTRACE_DATA=/opt/blindtrace/data
+Environment=BLINDTRACE_STATE=/var/lib/blindtrace
+Environment=BLINDTRACE_PREFIX=/blindtrace
+Environment=BLINDTRACE_PORT=8170
+DynamicUser=yes
+StateDirectory=blindtrace
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use BlindTrace, please cite it as below."
+title: "BlindTrace: blinded hand-tracing of particles in microscopy images"
+authors:
+  - family-names: "Groß"
+    given-names: "Rüdiger"
+    affiliation: "Ulm University"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/RueMGross/BlindTrace"
+keywords:
+  - microscopy
+  - electron microscopy
+  - extracellular vesicles
+  - particle sizing
+  - blinded annotation
