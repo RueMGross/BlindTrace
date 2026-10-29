@@ -1,13 +1,13 @@
 # BlindTrace
 
-Blinded hand-tracing of particles in microscopy images with an Apple Pencil (or any pen or touch screen), plus the analysis that turns several annotators' tracings into consensus particle sizes with agreement statistics.
+Blinded manual tracing of particles in microscopy images on a tablet or any pen or touch screen, plus the analysis that turns several annotators' tracings into consensus particle sizes with agreement statistics.
 
-BlindTrace was written to size extracellular vesicles in liquid-phase and negative-stain transmission electron microscopy, where automatic segmentation is unreliable and manual tracing is the reference. Manual tracing is only a fair reference if the annotators cannot tell which sample they are looking at, so BlindTrace hides that.
+BlindTrace was written to size extracellular vesicles by manual tracing in liquid-phase and negative-stain transmission electron microscopy, where automatic segmentation is unreliable. Several annotators trace every image without knowing which sample it shows, which keeps expectations about the samples out of the sizes, and the analysis combines their tracings into consensus particles.
 
 ## What it does
 
 - **Blinding.** Images are served in a random order per annotator, under opaque random names, rotated by a random multiple of 90° and optionally mirrored. Contrast is normalised per image, and data bars and scale bars can be cropped. All images can be resampled to one pixel size. The unblinding key stays on your computer and never goes on the server.
-- **Tracing.** The annotator draws the outline of each particle with the pencil, and the line is used exactly as drawn.
+- **Tracing.** The annotator draws the outline of each particle with a pen (or a finger), and the line is used exactly as drawn.
   - Diameters are shown live.
   - Outlines can be marked "unsure" or deleted.
   - Particles cut by the image edge can be traced past the border.
@@ -99,7 +99,7 @@ python analyze.py --key private/key.json --key private/key_r2.json \
 
 Annotator instructions, as shown on the start screen:
 
-- **Apple Pencil:** trace the outer boundary of each particle, including its dark rim if it has one. Zoom in to trace precisely.
+- **Pen:** trace the outer boundary of each particle, including its dark rim if it has one. Zoom in to trace precisely.
 - **Unsure or wrong outline:** tap the contour to mark it unsure or delete it.
 - **Particles cut by the image edge:** trace them anyway and carry the line past the edge.
 - **Approve:** when everything is traced, tap Approve. An image with no particles is approved empty. Unusable images are excluded with a reason.

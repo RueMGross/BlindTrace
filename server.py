@@ -1,4 +1,4 @@
-"""BlindTrace server: blinded particle tracing with Apple Pencil (or any touch/pen device).
+"""BlindTrace server: blinded manual particle tracing on a tablet or any pen/touch device.
 
 Serves the single-page tracing app, the blinded task images and stores the tracings.
 Images carry only opaque tokens; the unblinding key made by prepare.py never goes on

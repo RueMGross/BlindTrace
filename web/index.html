@@ -65,7 +65,7 @@ button:disabled { opacity: .4; }
 <div id="top" class="bar">
   <span id="prog">–</span>
   <span id="who" style="color:var(--ink2)"></span>
-  <button id="switch" title="Hand the iPad to another person" style="min-height:34px;padding:4px 10px;font-size:13px">Switch person</button>
+  <button id="switch" title="Hand the device to another person" style="min-height:34px;padding:4px 10px;font-size:13px">Switch person</button>
   <span class="grow"></span>
   <label class="sl">Bright <input id="bri" type="range" min="-100" max="100" value="0"></label>
   <label class="sl">Contrast <input id="con" type="range" min="-60" max="200" value="0"></label>
@@ -74,7 +74,7 @@ button:disabled { opacity: .4; }
 
 <div id="bottom" class="bar">
   <button id="back" title="Previous image">‹ Back</button>
-  <button id="finger" title="Draw with finger (if no Apple Pencil)">✍︎ Finger draw</button>
+  <button id="finger" title="Draw with a finger (if there is no pen)">✍︎ Finger draw</button>
   <button id="fit" title="Fit image">Fit</button>
   <button id="snapbtn" title="Snap new lines to the nearest edge">⌖ Snap</button>
   <button id="undo" title="Undo">Undo</button>
@@ -108,7 +108,7 @@ button:disabled { opacity: .4; }
     <h1>Particle tracing</h1>
     <p>Blinded: images are shown in random order and orientation, without names.</p>
     <ul>
-      <li><b>Apple Pencil:</b> trace the outer boundary of each particle, including its dark rim if it has one. Your line is used exactly as drawn and shows the diameter. Zoom in to trace precisely.</li>
+      <li><b>Pen:</b> trace the outer boundary of each particle, including its dark rim if it has one. Your line is used exactly as drawn and shows the diameter. Zoom in to trace precisely.</li>
       <li><b>Tap a contour</b> to mark it unsure or delete it.</li>
       <li><b>Particles cut by the image edge:</b> trace them anyway and carry the line past the edge where you think the outline goes. They are marked ~ (at edge).</li>
       <li><b>Fingers:</b> drag to move, pinch to zoom.</li>
@@ -616,7 +616,7 @@ function rebuildDisp() {
 
 // The canvas bitmap follows the canvas's real on-screen box (iPad Safari's 100vh is
 // taller than the visible area while the toolbar shows), and every pointer position
-// is taken relative to that box, so drawing lands exactly under the pencil.
+// is taken relative to that box, so drawing lands exactly under the pen.
 let cvRect = { left: 0, top: 0, width: innerWidth, height: innerHeight };
 function resize() {
   dpr = window.devicePixelRatio || 1;
@@ -799,13 +799,13 @@ function startGesture() {
 }
 cv.addEventListener('pointerdown', e => {
   if (!disp) return;
-  if (stroke && e.pointerType === 'touch') return;          // palm while the pencil draws
+  if (stroke && e.pointerType === 'touch') return;          // palm while the pen draws
   try { cv.setPointerCapture(e.pointerId); } catch (err) { /* synthetic or already released pointer */ }
   checkSize();
   const [x, y] = loc(e);
   pointers.set(e.pointerId, { x, y, type: e.pointerType });
   if (e.pointerType === 'pen' || (isDraw(e) && !gesture)) {
-    gesture = null; tapCand = null;           // the pencil always draws; a resting palm is ignored
+    gesture = null; tapCand = null;           // the pen always draws; a resting palm is ignored
     stroke = { id: e.pointerId, pts: [toImg(x, y)], len: 0, t0: performance.now(), sx: x, sy: y };
   } else {
     if (stroke && stroke.id !== e.pointerId && e.pointerType === 'touch') stroke = null;   // second finger: zoom instead
@@ -976,7 +976,7 @@ $('approve').onclick = async () => {
   if (!task || !gray) return;
   const finish = async () => {
     curStatus = 'done';
-    if (!await save('done')) toast('Offline: kept on this iPad and sent when the connection is back');
+    if (!await save('done')) toast('Offline: kept on this device and sent when the connection is back');
     status[task.token] = { status: 'done', n: contours.length };
     advance();
   };
@@ -986,7 +986,7 @@ $('approve').onclick = async () => {
 $('excl').onclick = () => {
   const go = reason => async () => {
     curStatus = 'excluded';
-    if (!await save('excluded', reason)) toast('Offline: kept on this iPad and sent when the connection is back');
+    if (!await save('excluded', reason)) toast('Offline: kept on this device and sent when the connection is back');
     status[task.token] = { status: 'excluded', n: contours.length };
     advance();
   };
@@ -1006,7 +1006,7 @@ const SNAP_UI = false;
 if (SNAP_UI) { try { setSnap(localStorage.getItem('blindtrace.snap') === '1'); } catch (e) { /* storage unavailable */ } }
 else for (const id of ['snapbtn', 'p-alt', 'p-mine']) $(id).style.display = 'none';
 $('undo').onclick = () => { if (!undoStack.length) return; contours = undoStack.pop(); selected = null; changed(); };
-$('finger').onclick = () => { fingerDraw = !fingerDraw; $('finger').classList.toggle('on', fingerDraw); toast(fingerDraw ? 'One finger draws, two fingers move/zoom' : 'Fingers move/zoom; Pencil draws'); };
+$('finger').onclick = () => { fingerDraw = !fingerDraw; $('finger').classList.toggle('on', fingerDraw); toast(fingerDraw ? 'One finger draws, two fingers move/zoom' : 'Fingers move/zoom; the pen draws'); };
 let bcTimer = 0;
 for (const id of ['bri', 'con']) $(id).addEventListener('input', () => {
   bc = { b: +$('bri').value, c: +$('con').value };
@@ -1051,7 +1051,7 @@ fetch(`${API}api/config`).then(r => r.json()).then(c => {
 }).catch(() => { /* keep the default title */ });
 $('start').onclick = () => start($('name').value.trim().toUpperCase());
 $('name').addEventListener('keydown', e => { if (e.key === 'Enter') $('start').onclick(); });
-// initials are not pre-filled: the iPad may be shared, and each person must type their own
+// initials are not pre-filled: the device may be shared, and each person must type their own
 $('switch').onclick = () => sheet('Hand over to another person?', [
   ['Yes, switch person', async () => { if (task) await save(curStatus); location.reload(); }], ['Cancel', null]]);
 resize();
