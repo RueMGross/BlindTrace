@@ -1,5 +1,7 @@
 # BlindTrace
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23758569.svg)](https://doi.org/10.5281/zenodo.23758569)
+
 Blinded manual tracing of particles in microscopy images on a tablet or any pen or touch screen, plus the analysis that turns several annotators' tracings into consensus particle sizes with agreement statistics.
 
 BlindTrace was written to size extracellular vesicles by manual tracing in liquid-phase and negative-stain transmission electron microscopy, where automatic segmentation is unreliable. Several annotators trace every image without knowing which sample it shows, which keeps expectations about the samples out of the sizes, and the analysis combines their tracings into consensus particles.
@@ -163,7 +165,11 @@ The tests simulate three annotators tracing the known particles of the synthetic
 
 ## Citation
 
-If you use BlindTrace, please cite it (see `CITATION.cff`). A paper describing its use is in preparation.
+If you use BlindTrace, please cite it:
+
+> Groß, R. M. BlindTrace: blinded manual tracing of particles in microscopy images. Zenodo. https://doi.org/10.5281/zenodo.23758569
+
+This DOI always points to the latest version; version 0.1.1 is https://doi.org/10.5281/zenodo.23758570. A paper describing its use is in preparation.
 
 ## License
 

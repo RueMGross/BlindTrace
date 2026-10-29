@@ -6,6 +6,8 @@ authors:
     given-names: "Rüdiger M."
     affiliation: "Institute of Molecular Virology, Ulm University Medical Center"
 version: 0.1.1
+doi: 10.5281/zenodo.23758569
+date-released: 2026-10-29
 license: MIT
 repository-code: "https://github.com/RueMGross/BlindTrace"
 keywords:
