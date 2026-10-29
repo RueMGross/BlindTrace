@@ -1,10 +1,10 @@
 cff-version: 1.2.0
 message: "If you use BlindTrace, please cite it as below."
-title: "BlindTrace: blinded hand-tracing of particles in microscopy images"
+title: "BlindTrace: blinded manual tracing of particles in microscopy images"
 authors:
   - family-names: "Groß"
-    given-names: "Rüdiger"
-    affiliation: "Ulm University"
+    given-names: "Rüdiger M."
+    affiliation: "Institute of Molecular Virology, Ulm University Medical Center"
 version: 0.1.1
 license: MIT
 repository-code: "https://github.com/RueMGross/BlindTrace"
