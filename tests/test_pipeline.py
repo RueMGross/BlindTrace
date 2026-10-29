@@ -44,7 +44,7 @@ def simulate(key, truth, ann_dir, seed, exclude=None):
     rng = np.random.default_rng(seed)
     for name, (factor, noise, miss) in ANNOTATORS.items():
         os.makedirs(os.path.join(ann_dir, name), exist_ok=True)
-        for t, k in key.items():
+        for n_task, (t, k) in enumerate(key.items()):
             served_w, served_h = (k['orig_h'], k['orig_w']) if k['k90'] % 2 else (k['orig_w'], k['orig_h'])
             cs = []
             for p in truth[truth.image_id == k['image_id']].itertuples():
@@ -60,7 +60,7 @@ def simulate(key, truth, ann_dir, seed, exclude=None):
                            'd_nm': round(analyze.shape_nm(pts, k['nm_per_px'])['d_nm'], 1)})
             st = 'excluded' if exclude and (name, k['image_id']) in exclude and k['repeat_of'] is None else 'done'
             rec = {'status': st, 'contours': cs if st == 'done' else [], 'reason': 'focus' if st == 'excluded' else None,
-                   't_open': '2026-01-01T10:00:00Z', 't_saved': '2026-01-01T10:01:00Z'}
+                   't_open': f'2026-01-01T10:{n_task:02d}:00.{seed:03d}Z', 't_saved': f'2026-01-01T10:{n_task:02d}:30Z'}
             json.dump(rec, open(os.path.join(ann_dir, name, f'{t}.json'), 'w'))
 
 
@@ -108,6 +108,76 @@ def test_end_to_end(demo):
     intra = pd.read_csv(out / 'intra_rater.csv')
     assert (intra[intra.image_id == 'POOLED'].f1 > 0.8).all()
     assert (out / 'SUMMARY.md').exists() and (out / 'fig_groups.png').exists()
+    assert not pd.read_csv(out / 'images.csv').suspect_t_open.any()
+
+
+def test_suspect_records_and_exclusions(demo, tmp_path):
+    """A record saved while another image was open shares that image's load time: it is
+    flagged, and records listed in --exclude-records count as missing."""
+    key = json.load(open(demo / 'key.json'))
+    ann = tmp_path / 'ann'
+    simulate(key, pd.read_csv(demo / 'truth.csv'), ann, seed=4)
+    toks = sorted(key)
+    r0 = json.load(open(ann / 'AA' / f'{toks[0]}.json'))
+    bad = {'status': 'done', 'contours': [], 't_open': r0['t_open'], 't_saved': r0['t_saved']}
+    json.dump(bad, open(ann / 'AA' / f'{toks[1]}.json', 'w'))
+    out = tmp_path / 'out'
+    log = tmp_path / 'log.jsonl'
+    log.write_text(''.join(json.dumps(e) + '\n' for e in [
+        {'t': '1', 'a': 'AA', 'task': toks[1], 'status': 'done', 'n': 4},
+        {'t': '2', 'a': 'BB', 'task': toks[1], 'status': 'done', 'n': 0},       # another annotator: no drop
+        {'t': '3', 'a': 'AA', 'task': toks[1], 'status': 'done', 'n': 0}]))
+    analyze.main(['--key', str(demo / 'key.json'), '--ann', str(ann), '--out', str(out), '--log', str(log)])
+    im = pd.read_csv(out / 'images.csv')
+    assert set(im[im.suspect_t_open].token) == {toks[0], toks[1]} and set(im[im.suspect_t_open].annotator) == {'AA'}
+    d = pd.read_csv(out / 'outline_drops.csv')
+    assert len(d) == 1 and d.annotator.item() == 'AA' and d.n_before.item() == 4
+    pd.DataFrame({'annotator': ['AA'], 'token': [toks[1]], 'reason': ['saved during loading']}).to_csv(
+        tmp_path / 'ex.csv', index=False)
+    analyze.main(['--key', str(demo / 'key.json'), '--ann', str(ann), '--out', str(out), '--exclude-records',
+                  str(tmp_path / 'ex.csv')])
+    im = pd.read_csv(out / 'images.csv')
+    assert im[(im.annotator == 'AA') & (im.token == toks[1])].status.item() == 'dropped'
+    assert set(im.annotator) == set(ANNOTATORS)                  # AA still analysed
+
+
+def test_prepare_rejects_bad_input(demo, tmp_path):
+    man = pd.read_csv(demo / 'manifest.csv').head(2)
+    man['image'] = [str(demo / p) for p in man.image]
+    bad = man.assign(crop_bottom=[0, 5000])
+    bad.to_csv(tmp_path / 'crop.csv', index=False)
+    r = subprocess.run([PY, 'prepare.py', str(tmp_path / 'crop.csv'), '--out', str(tmp_path / 'b1'), '--key',
+                        str(tmp_path / 'k1.json')], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode != 0 and 'does not fit' in r.stderr and not (tmp_path / 'k1.json').exists()
+    assert not (tmp_path / 'b1').exists()                        # nothing half-built left behind
+    man.to_csv(tmp_path / 'clash.csv', index=False)              # same image_ids as round 1
+    r = subprocess.run([PY, 'prepare.py', str(tmp_path / 'clash.csv'), '--out', str(tmp_path / 'b2'), '--key',
+                        str(tmp_path / 'k2.json'), '--previous', str(demo / 'key.json')], cwd=ROOT, capture_output=True,
+                       text=True)
+    assert r.returncode != 0 and 'already used' in r.stderr
+
+
+def test_server_order_and_validation(tmp_path):
+    data = tmp_path / 'data'
+    os.makedirs(data / 'images')
+    orig = [f'{i:012x}' for i in range(40)]
+    tasks = [{'token': t, 'nm_per_px': 1, 'w': 10, 'h': 10, 'after': None} for t in orig]
+    tasks += [{'token': f'{100 + i:012x}', 'nm_per_px': 1, 'w': 10, 'h': 10, 'after': orig[i]} for i in range(4)]
+    json.dump({'title': '', 'tasks': tasks}, open(data / 'tasks.json', 'w'))
+    server.setup(str(data), str(tmp_path / 'state'))
+    for name in [f'N{i}' for i in range(200)]:                   # every repeat >= MIN_GAP after its original
+        order = server.make_order(name)
+        assert sorted(order) == sorted(t['token'] for t in tasks)
+        assert all(order.index(t['token']) - order.index(t['after']) >= server.MIN_GAP for t in tasks if t['after'])
+    ok = [{'pts': [[0, 0], [5, 0], [5, 5]]}]
+    assert server.valid_contours(ok)
+    assert not server.valid_contours([{'pts': [[0, 0], [5, 0]]}])
+    assert not server.valid_contours([{'pts': [[0, 0], [5, 0], [float('nan'), 5]]}])
+    assert not server.valid_contours([{'pts': [[0, 0], [5, 0], [True, 5]]}])
+    os.makedirs(tmp_path / 'state' / 'orders', exist_ok=True)    # orders of another task set
+    json.dump(['ffffffffffff'], open(tmp_path / 'state' / 'orders' / 'AB.json', 'w'))
+    with pytest.raises(SystemExit):
+        server.setup(str(data), str(tmp_path / 'state'))
 
 
 def test_second_round_with_anchors(demo, tmp_path):

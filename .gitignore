@@ -10,3 +10,4 @@ out/
 demo/images/
 demo/manifest.csv
 demo/truth.csv
+*.partial/

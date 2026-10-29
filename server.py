@@ -27,9 +27,11 @@ Every option can also be set as an environment variable (BLINDTRACE_DATA, …).
 """
 import argparse
 import json
+import math
 import os
 import random
 import re
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,12 +51,16 @@ TASKS = {}
 
 def make_order(name):
     """Random task order per annotator (seeded by the name, so it is stable); each hidden
-    repeat is placed at least MIN_GAP tasks after its original."""
+    repeat is placed at least MIN_GAP tasks after its original. Shuffles are redrawn until
+    no repeated original falls in the last MIN_GAP places (if the set is large enough)."""
     rng = random.Random(f'blindtrace:{name}')
     orig = [t for t in TASKS.values() if not t['after']]
     reps = [t for t in TASKS.values() if t['after']]
     order = [t['token'] for t in orig]
-    rng.shuffle(order)
+    for _ in range(1000):
+        rng.shuffle(order)
+        if all(order.index(r['after']) + MIN_GAP <= len(order) for r in reps):
+            break
     for r in sorted(reps, key=lambda t: order.index(t['after'])):
         lo = order.index(r['after']) + MIN_GAP
         pos = rng.randint(lo, len(order)) if lo <= len(order) else len(order)
@@ -85,16 +91,20 @@ def ann_path(name, token):
 
 
 def valid_contours(cs):
+    """Outlines as the app sends them: 'pts' a closed line of >= 3 points (the app sends
+    >= 24), 'drawn' and 'base' optional; all coordinates finite numbers."""
     if not isinstance(cs, list) or len(cs) > 1000:
         return False
     for c in cs:
-        if not isinstance(c, dict):
+        if not isinstance(c, dict) or not isinstance(c.get('pts'), list) or len(c['pts']) < 3:
             return False
         for k in ('pts', 'drawn', 'base'):
-            p = c.get(k, [])
+            p = c.get(k) or []
             if not isinstance(p, list) or len(p) > 600:
                 return False
-            if any(not (isinstance(q, list) and len(q) == 2 and all(isinstance(v, (int, float)) for v in q)) for q in p):
+            if any(not (isinstance(q, list) and len(q) == 2 and
+                        all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in q))
+                   for q in p):
                 return False
     return True
 
@@ -195,6 +205,10 @@ def setup(data, state, web=os.path.join(HERE, 'web'), prefix=''):
     TITLE = j.get('title') or 'Particle tracing'
     TASKS = {t['token']: t for t in j['tasks']}
     os.makedirs(STATE, exist_ok=True)
+    od = os.path.join(STATE, 'orders')
+    for f in os.listdir(od) if os.path.isdir(od) else []:
+        if f.endswith('.json') and set(json.load(open(os.path.join(od, f)))) != set(TASKS):
+            sys.exit(f'{STATE} belongs to a different task set ({f}): use a new --state folder for this task set')
 
 
 def main():

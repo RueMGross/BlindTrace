@@ -116,7 +116,8 @@ Each annotator uses their own initials. The task order is fixed per initials, so
 | file | contents |
 |---|---|
 | `particles_all.csv` | every outline in original image coordinates: diameter, axes, edge flag, label |
-| `images.csv` | every annotator × task: status, exclusion reason, counts, time spent |
+| `images.csv` | every annotator × task: status, exclusion reason, counts, time spent, `suspect_t_open` (see below) |
+| `outline_drops.csv` | with `--log`: saves that removed all outlines of an image (see Quality control) |
 | `annotators.csv` | per annotator × group: images, particles, median size with CI |
 | `intra_rater.csv` | each image traced twice by the same annotator (repeat or cross-round anchor): F1, size difference, within-particle CV |
 | `inter_rater.csv` | pairwise F1; ICC(2,1) of counts per image and of particle sizes; Fleiss' kappa of approve/exclude |
@@ -130,6 +131,14 @@ Each annotator uses their own initials. The task order is fixed per initials, so
 - **Consensus.** Images approved by a majority of annotators are analysed. A consensus particle is one traced by a majority of all annotators, and its diameter is the mean of their equivalent circle diameters.
 - **Edge particles.** Outlines that reach the image border count as particles but are excluded from sizes.
 - **Confidence intervals.** These resample images, not particles, because particles on one image are not independent.
+
+**Quality control.** Versions before 0.1.1 could save an empty tracing over an image that was still loading, e.g. when Back was tapped quickly several times. Version 0.1.1 prevents this. For data collected with an older version, two heuristic checks help find damaged records:
+- **Load time.** Every saved record carries the time its image finished loading. A record that shares this time with another image was saved while a different image was open. `analyze.py` warns about these and marks them in `images.csv` (`suspect_t_open`).
+- **Audit log.** `--log state/log.jsonl` lists every save that removed all outlines of an image (`outline_drops.csv`). It also catches damage that the load-time check misses because the image was opened again later.
+
+An image that never had outlines and was saved empty during loading cannot be recognised by either check. Look for runs of empty saves only seconds apart in the audit log.
+
+**Excluding records.** To leave damaged records out, list them in a CSV with columns `annotator`, `token` and `reason`, and pass it with `--exclude-records`. Listed records count as missing: the image is then decided by the other annotators.
 
 ## Data formats
 

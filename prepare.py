@@ -59,6 +59,9 @@ def prepared(entry):
     from a key entry (or a manifest row turned into one by make_entry)."""
     a = load_grey(entry['image'])
     t, b, left, r = entry['crop']
+    if min(t, b, left, r) < 0 or t + b >= a.shape[0] or left + r >= a.shape[1]:
+        raise ValueError(f'{entry["image"]}: crop (top, bottom, left, right) = {entry["crop"]} does not fit '
+                         f'the image ({a.shape[0]} x {a.shape[1]} px)')
     a = a[t:a.shape[0] - b, left:a.shape[1] - r]
     if entry['resample'] and entry['nm_per_px'] != entry['nm_per_px_source']:
         f = entry['nm_per_px_source'] / entry['nm_per_px']
@@ -122,6 +125,9 @@ def main():
     prev = {}
     for kf in a.previous:
         prev.update(json.load(open(kf)))
+    clash = sorted(set(ids) & {e['image_id'] for e in prev.values()})
+    if clash:
+        sys.exit(f'image_id already used in an earlier round: {", ".join(clash[:5])} (anchors are added with --anchors)')
     anchors = []
     if a.anchors:
         groups = {g for g in a.anchor_groups.split(',') if g}
@@ -131,9 +137,10 @@ def main():
             sys.exit(f'only {len(pool)} earlier images available as anchors')
         anchors = [str(t) for t in rng.choice(pool, a.anchors, replace=False)]
 
-    if os.path.isdir(a.out):
-        shutil.rmtree(a.out)
-    os.makedirs(os.path.join(a.out, 'images'))
+    tmp = a.out.rstrip('/') + '.partial'      # built here, moved to OUT only when complete
+    if os.path.isdir(tmp):
+        shutil.rmtree(tmp)
+    os.makedirs(os.path.join(tmp, 'images'))
     n_rep = int(round(a.repeat_frac * len(rows)))
     rep_rows = set(rng.choice(len(rows), n_rep, replace=False).tolist())
     tasks, key = [], {}
@@ -144,7 +151,7 @@ def main():
             if token not in prev and token not in key:
                 break
         t = transform(img8, k90, flip)
-        Image.fromarray(np.ascontiguousarray(t)).save(os.path.join(a.out, 'images', f'{token}.png'), optimize=True)
+        Image.fromarray(np.ascontiguousarray(t)).save(os.path.join(tmp, 'images', f'{token}.png'), optimize=True)
         tasks.append({'token': token, 'nm_per_px': entry['nm_per_px'], 'w': int(t.shape[1]), 'h': int(t.shape[0]),
                       'after': repeat_of})
         key[token] = {**{k: entry[k] for k in ('image_id', 'image', 'group', 'crop', 'nm_per_px_source', 'nm_per_px',
@@ -172,7 +179,10 @@ def main():
         emit(e, prepared(e), *orient(seen), None, t)
         print(f'anchor {e["image_id"]}', flush=True)
 
-    json.dump({'title': a.title, 'tasks': tasks}, open(os.path.join(a.out, 'tasks.json'), 'w'), indent=1)
+    json.dump({'title': a.title, 'tasks': tasks}, open(os.path.join(tmp, 'tasks.json'), 'w'), indent=1)
+    if os.path.isdir(a.out):
+        shutil.rmtree(a.out)
+    os.replace(tmp, a.out)
     os.makedirs(os.path.dirname(os.path.abspath(a.key)), exist_ok=True)
     json.dump(key, open(a.key, 'w'), indent=1)
     print(f'{len(tasks)} tasks: {len(rows)} images + {n_rep} repeats + {len(anchors)} anchors (seed {seed})\n'

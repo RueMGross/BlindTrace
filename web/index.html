@@ -899,7 +899,9 @@ async function post(body) {
 }
 function queueKey(t) { return `blindtrace.pending.${me}.${t}`; }
 async function save(st, reason) {
-  if (!task) return false;
+  // nothing to save until the image and its saved tracing are loaded: during loading the
+  // contours are still empty and curStatus is that of the previous image
+  if (!task || !gray) return false;
   clearTimeout(saveTimer);
   const body = payload(st, reason);
   setSave('saving…');
@@ -915,11 +917,17 @@ async function save(st, reason) {
 }
 async function flushQueue() {
   let keys = [];
-  try { keys = Object.keys(localStorage).filter(k => k.startsWith(`blindtrace.pending.${me}.`)); } catch (e) { return; }
+  // the open image is skipped: its newer state is sent by save(), and an older queued copy
+  // arriving after it would replace it
+  try { keys = Object.keys(localStorage).filter(k => k.startsWith(`blindtrace.pending.${me}.`) && !(task && k === queueKey(task.token))); } catch (e) { return; }
   for (const k of keys) {
-    try { await post(JSON.parse(localStorage.getItem(k))); localStorage.removeItem(k); } catch (e) { return; }
+    try {
+      const b = JSON.parse(localStorage.getItem(k));
+      await post(b); localStorage.removeItem(k);
+      status[b.t] = { status: b.status, n: b.contours.length };
+    } catch (e) { return; }
   }
-  if (keys.length) setSave('saved ✓');
+  if (keys.length) { setSave('saved ✓'); updateBar(); }
 }
 setInterval(() => { if (me) flushQueue(); }, 15000);
 
@@ -984,6 +992,7 @@ $('approve').onclick = async () => {
   finish();
 };
 $('excl').onclick = () => {
+  if (!task || !gray) return;
   const go = reason => async () => {
     curStatus = 'excluded';
     if (!await save('excluded', reason)) toast('Offline: kept on this device and sent when the connection is back');

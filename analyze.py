@@ -4,7 +4,9 @@ Reads the unblinding key(s) made by prepare.py and the tracings saved by the ser
 (STATE/ann/<annotator>/<token>.json), maps every traced outline back onto its original
 image and writes to OUT/:
   particles_all.csv        one row per traced outline, original image coordinates
-  images.csv               one row per annotator x task (status, exclusion reason, counts)
+  images.csv               one row per annotator x task (status, exclusion reason, counts,
+                           suspect_t_open: saved while another image was open)
+  outline_drops.csv        with --log: saves that removed all outlines of an image
   annotators.csv           per annotator x group: images, particles, median size
   intra_rater.csv          per annotator: each image traced twice (hidden repeat, or anchor
                            from an earlier round) vs its original (+ intra_rater_pairs.csv)
@@ -26,8 +28,10 @@ the mean of their diameters. Diameter = equivalent circle diameter from the poly
 (Green's theorem); outlines that reach the image border are excluded from sizes but
 count as particles. Confidence intervals resample images, not particles.
 
-Usage: python analyze.py --key private/key.json --ann state/ann [--build build] [--out out]
-       (one --key and --ann per round; --build checks the coordinate mapping pixel by pixel)
+Usage: python analyze.py --key private/key.json --ann state/ann [--build build] [--log state/log.jsonl]
+                          [--exclude-records exclusions.csv] [--out out]
+       (one --key, --ann (and --build, --log) per round; --build checks the coordinate mapping
+       pixel by pixel; --exclude-records lists records to treat as missing: annotator, token, reason)
 """
 import argparse
 import glob
@@ -218,6 +222,9 @@ def main(argv=None):
     ap.add_argument('--annotators', default='', help='comma-separated initials (default: all who finished)')
     ap.add_argument('--include-partial', action='store_true', help='also use annotators with unfinished tasks')
     ap.add_argument('--iou', type=float, default=0.3, help='IoU for two outlines to be the same particle')
+    ap.add_argument('--log', action='append', default=[], help='server audit log STATE/log.jsonl: check for lost outlines')
+    ap.add_argument('--exclude-records', default=None,
+                    help='CSV (annotator, token, reason): records to treat as missing, e.g. damaged saves')
     a = ap.parse_args(argv)
     OUT, THR = a.out, a.iou
     os.makedirs(OUT, exist_ok=True)
@@ -232,6 +239,9 @@ def main(argv=None):
         if v.get('anchor_of'):         # anchor: earlier-round image shown again = cross-round repeat
             assert v['anchor_of'] in key, f'anchor_of {v["anchor_of"]}: pass the key of that round too'
             v['repeat_of'] = v['anchor_of']
+    paths = {}
+    for v in key.values():
+        assert paths.setdefault(v['image_id'], v['image']) == v['image'], f'image_id {v["image_id"]} names two images'
     orig_tokens = [t for t, k in key.items() if k['repeat_of'] is None]
     rep_tokens = [t for t, k in key.items() if k['repeat_of'] is not None]
     n_anchor = sum(bool(k.get('anchor_of')) for k in key.values())
@@ -245,14 +255,21 @@ def main(argv=None):
     # ---- annotators
     found = sorted({d for ad in a.ann if os.path.isdir(ad) for d in os.listdir(ad) if os.path.isdir(os.path.join(ad, d))})
     want = [x.strip().upper() for x in a.annotators.split(',') if x.strip()]
+    drop = set()
+    if a.exclude_records:
+        ex = pd.read_csv(a.exclude_records, dtype=str)
+        drop = {(r.annotator, r.token) for r in ex.itertuples()}
+        assert all(t in key for _, t in drop), 'exclude-records: token not in the key'
+        print(f'{len(drop)} record(s) excluded as listed in {a.exclude_records}')
     RAW, annotators = {}, []
     for name in found:
         recs = {os.path.basename(f)[:-5]: json.load(open(f)) for ad in a.ann for f in glob.glob(os.path.join(ad, name, '*.json'))}
-        recs = {t: r for t, r in recs.items() if t in key}
+        recs = {t: r for t, r in recs.items() if t in key and (name, t) not in drop}
         fin = sum(r['status'] != 'draft' for r in recs.values())
-        if want and name not in want:
+        n_drop = sum(n == name for n, _ in drop)
+        if want and name.upper() not in want:
             continue
-        if fin == 0 or (fin < len(key) and not a.include_partial):
+        if fin == 0 or (fin + n_drop < len(key) and not a.include_partial):
             print(f'skip {name}: {fin}/{len(key)} tasks finished')
             continue
         RAW[name] = recs
@@ -260,13 +277,46 @@ def main(argv=None):
     if not annotators:
         sys.exit('no annotator to analyse')
     print('annotators:', ', '.join(f'{n} ({sum(r["status"] != "draft" for r in RAW[n].values())}/{len(key)})' for n in annotators))
+    # QC: the app records when an image finished loading (t_open). A record that shares it with
+    # another image was saved while a different image was open, i.e. not traced on this image
+    # (app versions before 0.1.1 could save during image loading). Review and list such records
+    # in --exclude-records.
+    suspect = set()
+    for name in annotators:
+        by_open = {}
+        for t, r in RAW[name].items():
+            if r.get('t_open'):
+                by_open.setdefault(r['t_open'], []).append(t)
+        suspect |= {(name, t) for ts in by_open.values() if len(ts) > 1 for t in ts}
+    if suspect:
+        print(f'WARNING: {len(suspect)} record(s) share their load time with another image (saved while another '
+              f'image was open): {", ".join(f"{n}:{t}" for n, t in sorted(suspect))}; see images.csv suspect_t_open')
+    # QC from the audit log: a non-draft save with no outlines after one with outlines. Catches
+    # outlines lost also when the image was opened again later (its last record then looks normal).
+    drops = []
+    for lf in a.log:
+        last = {}
+        for line in open(lf):
+            e = json.loads(line)
+            k = (e['a'], e['task'])
+            p = last.get(k)
+            if k[0] in annotators and k[1] in key and p and p['n'] > 0 and e['n'] == 0 and e['status'] != 'draft':
+                drops.append({'annotator': k[0], 'token': k[1], 'time': e['t'], 'n_before': p['n'],
+                              'status_before': p['status'], 'status': e['status']})
+            last[k] = e
+    if a.log:
+        pd.DataFrame(drops, columns=['annotator', 'token', 'time', 'n_before', 'status_before', 'status']).to_csv(
+            os.path.join(OUT, 'outline_drops.csv'), index=False)
+        if drops:
+            print(f'WARNING: {len(drops)} save(s) removed all outlines of an image (see outline_drops.csv): '
+                  f'{", ".join(sorted({d["annotator"] + ":" + d["token"] for d in drops}))}')
 
     # ---- particles and tasks
     prow, trow, POLY, dmax = [], [], {}, 0.0
     for name in annotators:
         for t, k in key.items():
             r = RAW[name].get(t)
-            st = r['status'] if r else 'missing'
+            st = r['status'] if r else ('dropped' if (name, t) in drop else 'missing')
             cs = (r.get('contours') or []) if r else []
             dur = (pd.Timestamp(r['t_saved']) - pd.Timestamp(r['t_open'])).total_seconds() \
                 if r and r.get('t_open') and r.get('t_saved') else np.nan
@@ -274,7 +324,8 @@ def main(argv=None):
                          'repeat': k['repeat_of'] is not None, 'repeat_of': k['repeat_of'], 'status': st,
                          'reason': r.get('reason') if r else None, 'n_particles': len(cs),
                          'n_edge': sum(bool(c.get('edge')) for c in cs), 'n_unsure': sum(c.get('label') == 'unsure' for c in cs),
-                         'area_um2': k['orig_w'] * k['orig_h'] * (k['nm_per_px'] / 1000) ** 2, 'seconds_open': dur})
+                         'area_um2': k['orig_w'] * k['orig_h'] * (k['nm_per_px'] / 1000) ** 2, 'seconds_open': dur,
+                         'suspect_t_open': (name, t) in suspect})
             for i, c in enumerate(cs):
                 p = served_to_orig(c['pts'], k['k90'], k['flip'], k['orig_h'], k['orig_w'])
                 s = shape_nm(p, k['nm_per_px'])
@@ -314,7 +365,7 @@ def main(argv=None):
                          'n_excluded': int((ti.status == 'excluded').sum()),
                          'exclusion_reasons': '; '.join(f'{k}: {v}' for k, v in ti[ti.status == 'excluded'].reason.value_counts().items()),
                          'n_particles': len(g), 'n_edge': int(g.edge.sum()), 'n_unsure': int((g.label == 'unsure').sum()),
-                         'particles_per_image': len(g) / max(len(di), 1),
+                         'particles_per_image': len(g) / len(di) if len(di) else np.nan,
                          'particles_per_um2': len(g) / di.area_um2.sum() if len(di) else np.nan,
                          'n_sized': len(sz), 'median_nm': sz.d_nm.median(), 'median_ci_lo': lo, 'median_ci_hi': hi,
                          'q25_nm': sz.d_nm.quantile(0.25), 'q75_nm': sz.d_nm.quantile(0.75), 'mean_nm': sz.d_nm.mean()})
@@ -330,7 +381,8 @@ def main(argv=None):
             sr = imgs[(imgs.annotator == name) & (imgs.token == t)].status.iloc[0]
             kind = 'cross-round' if key[t].get('anchor_of') else 'repeat'
             row = {'annotator': name, 'kind': kind, 'image_id': key[t]['image_id'], 'group': key[t]['group'],
-                   'token_orig': to, 'token_rep': t, 'status_orig': so, 'status_rep': sr, 'status_agree': so == sr}
+                   'token_orig': to, 'token_rep': t, 'status_orig': so, 'status_rep': sr,
+                   'status_agree': so == sr and so in ('done', 'excluded')}
             if so == sr == 'done':
                 go, po = polys(name, to)
                 gr, pr = polys(name, t)
@@ -421,7 +473,7 @@ def main(argv=None):
             summ.append({'pair': pair, 'n_images': len(g), 'n_a': g.n_a.sum(), 'n_b': g.n_b.sum(),
                          'n_matched': g.n_matched.sum(), 'f1': f1})
         rated = imgs[~imgs.repeat & imgs.status.isin(['done', 'excluded'])].pivot(
-            index='token', columns='annotator', values='status').dropna()
+            index='token', columns='annotator', values='status').reindex(columns=annotators).dropna()
         table = np.column_stack([(rated == 'done').sum(axis=1), (rated == 'excluded').sum(axis=1)])
         summ.append({'pair': 'ALL', 'n_images': len(shared), 'n_images_majority': len(major),
                      'icc21_counts_per_image': icc_2_1(icc_cnt), 'icc21_size_matched': icc_2_1(icc_size),
@@ -462,7 +514,7 @@ def main(argv=None):
     gsum = pd.DataFrame(rows)
     gsum.to_csv(os.path.join(OUT, 'groups.csv'), index=False)
     fig_groups(ref, gsum, groups, ref_src, OUT)
-    write_summary(OUT, annotators, key, n_px, asum, intra, inter, gsum, ref_src, THR, len(parts))
+    write_summary(OUT, annotators, key, n_px, asum, intra, inter, gsum, ref_src, THR, len(parts), drop, suspect)
     print('done ->', OUT)
 
 
@@ -507,12 +559,14 @@ def fig_groups(ref, gsum, groups, ref_src, out):
     plt.close(fig)
 
 
-def write_summary(out, annotators, key, n_px, asum, intra, inter, gsum, ref_src, thr, n_outlines):
+def write_summary(out, annotators, key, n_px, asum, intra, inter, gsum, ref_src, thr, n_outlines, drop, suspect):
     f = lambda v, d=0: '' if v is None or (isinstance(v, float) and not np.isfinite(v)) else f'{v:.{d}f}'  # noqa: E731
     L = ['# BlindTrace analysis', '',
          f'Annotators: {", ".join(annotators)}. Tasks: {len(key)}; outlines: {n_outlines}.',
          f'Mapping check: {f"{n_px} pixels, served == original at every mapped position" if n_px else "not run (no --build)"}.',
-         f'Size reference: {ref_src}.', '',
+         f'Size reference: {ref_src}.',
+         f'Records excluded (--exclude-records): {len(drop)}. Records sharing their load time with another image: '
+         f'{len(suspect)}{" (see images.csv suspect_t_open)" if suspect else ""}.', '',
          '## Size per group (nm; 95 % CI resampling images)', '',
          '| Group | Images | Particles | D10 | D50 (95 % CI) | D90 | ' + ' | '.join(f'D50 {n}' for n in annotators) + ' |',
          '|---|---|---|---|---|---|' + '---|' * len(annotators)]
@@ -524,18 +578,21 @@ def write_summary(out, annotators, key, n_px, asum, intra, inter, gsum, ref_src,
     if inter is not None:
         a = inter[inter.pair == 'ALL'].iloc[0]
         L += ['', '## Agreement between annotators', '',
-              f'- Images approved by all: {a.n_images}; by a majority: {a.n_images_majority}; consensus particles: {a.n_consensus}',
-              f'- Size of the same particle, ICC(2,1): {f(a.icc21_size_matched, 2)} ({a.n_particles_found_by_all} particles traced by all)',
+              f'- Images approved by all: {int(a.n_images)}; by a majority: {int(a.n_images_majority)}; '
+              f'consensus particles: {int(a.n_consensus)}',
+              f'- Size of the same particle, ICC(2,1): {f(a.icc21_size_matched, 2)} '
+              f'({int(a.n_particles_found_by_all)} particles traced by all)',
               f'- Particles per image, ICC(2,1): {f(a.icc21_counts_per_image, 2)}',
               f'- Approve vs exclude, Fleiss kappa: {f(a.fleiss_kappa_exclusion, 2)}']
         for r in inter[inter.pair != 'ALL'].itertuples():
-            L.append(f'- {r.pair}: F1 {f(r.f1, 2)} ({r.n_matched} matched of {r.n_a} / {r.n_b}, {r.n_images} images)')
+            L.append(f'- {r.pair}: F1 {f(r.f1, 2)} ({int(r.n_matched)} matched of {int(r.n_a)} / {int(r.n_b)}, '
+                     f'{int(r.n_images)} images)')
     pooled = intra[intra.image_id == 'POOLED'] if len(intra) else intra
     if len(pooled):
         L += ['', '## Same annotator, same image twice', '',
               '| Annotator | Kind | Image pairs | F1 | Size difference, mean (nm) | Within-particle CV |', '|---|---|---|---|---|---|']
         for r in pooled.itertuples():
-            L.append(f'| {r.annotator} | {r.kind} | {r.n_image_pairs} | {f(r.f1, 2)} | {f(r.mean_diff_nm, 1)} | '
+            L.append(f'| {r.annotator} | {r.kind} | {int(r.n_image_pairs)} | {f(r.f1, 2)} | {f(r.mean_diff_nm, 1)} | '
                      f'{f(100 * r.cv_within, 1)} % |')
     L += ['', '## Methods (draft)', '',
           f'Particles were traced by hand by {len(annotators)} annotators with BlindTrace, blinded to sample identity: '
